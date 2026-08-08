@@ -75,6 +75,8 @@ export const arenaAbi = [
           { name: "losses", type: "uint32" },
           { name: "rating", type: "uint32" },
           { name: "knowledge", type: "uint32" },
+          { name: "knowledgeCap", type: "uint8" },
+          { name: "lastFactTaught", type: "uint8" },
           { name: "createdAt", type: "uint64" },
           { name: "lastTrainedAt", type: "uint64" },
         ],

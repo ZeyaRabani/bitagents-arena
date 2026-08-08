@@ -19,6 +19,7 @@ interface Agent {
   losses: number;
   rating: number;
   knowledge: number;
+  knowledgeCap: number;
   createdAt: string;
   lastTrainedAt: string;
 }
@@ -33,8 +34,18 @@ interface FeedEntry {
   ratingDelta: string;
   winnerRatingAfter: number;
   loserRatingAfter: number;
+  txHash: string;
+  explorerUrl: string;
   at: number;
   mode: "queue" | "royale";
+}
+
+interface MyAgent {
+  id: string;
+  name: string;
+  nameHash: string;
+  txHash: string;
+  explorerUrl: string;
 }
 
 interface Match {
@@ -60,7 +71,7 @@ function timeAgo(ts: number) {
 }
 
 export default function Home() {
-  const [myAgent, setMyAgentState] = useState<{ id: string; name: string } | null>(null);
+  const [myAgent, setMyAgentState] = useState<MyAgent | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [feed, setFeed] = useState<FeedEntry[]>([]);
@@ -87,7 +98,7 @@ export default function Home() {
     setHydrated(true);
   }, []);
 
-  function setMyAgent(agent: { id: string; name: string } | null) {
+  function setMyAgent(agent: MyAgent | null) {
     setMyAgentState(agent);
     if (agent) localStorage.setItem(STORAGE_KEY, JSON.stringify(agent));
     else localStorage.removeItem(STORAGE_KEY);
@@ -153,6 +164,12 @@ export default function Home() {
   const myKnown = me ? bitmaskToFacts(me.knowledge) : [];
   const myUnknown = me ? FACT_POOL.filter((f) => !myKnown.some((k) => k.id === f.id)) : [];
   const cooldownRemaining = me ? TRAIN_COOLDOWN_MS - (now - Number(me.lastTrainedAt) * 1000) : 0;
+  const atCap = me ? myKnown.length >= me.knowledgeCap : false;
+  const onComeback = me ? me.knowledgeCap > 5 : false;
+
+  function short(hash: string) {
+    return `${hash.slice(0, 10)}…${hash.slice(-6)}`;
+  }
 
   function toggleFact(id: number) {
     setChosenFacts((prev) => {
@@ -175,7 +192,13 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setMyAgent({ id: data.agentId, name });
+      setMyAgent({
+        id: data.agentId,
+        name,
+        nameHash: data.nameHash,
+        txHash: data.txHash,
+        explorerUrl: data.explorerUrl,
+      });
       await loadAgents();
     } catch (err) {
       setError((err as Error).message);
@@ -306,6 +329,21 @@ export default function Home() {
               <div>
                 <h2 className="font-display text-2xl font-bold">{myAgent.name}</h2>
                 <p className="font-mono text-xs text-muted-foreground">#{myAgent.id}</p>
+                {myAgent.nameHash && (
+                  <p className="font-mono text-xs text-muted-foreground mt-1" title={myAgent.nameHash}>
+                    hash {short(myAgent.nameHash)}
+                  </p>
+                )}
+                {myAgent.explorerUrl && (
+                  <a
+                    href={myAgent.explorerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-xs text-signal underline"
+                  >
+                    view creation tx
+                  </a>
+                )}
               </div>
               <div className="text-right">
                 <p className="font-display text-3xl font-bold text-signal">{me?.rating ?? "..."}</p>
@@ -336,7 +374,8 @@ export default function Home() {
 
                 <div className="mt-6">
                   <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Known facts ({myKnown.length}/{FACT_POOL.length})
+                    Known facts ({myKnown.length}/{me.knowledgeCap} cap)
+                    {onComeback && <span className="text-signal"> · comeback slot active</span>}
                   </p>
                   <div className="flex flex-wrap gap-2 mb-3">
                     {myKnown.map((f) => (
@@ -348,14 +387,17 @@ export default function Home() {
                   </div>
 
                   <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Train {cooldownRemaining > 0 && `— next in ${Math.ceil(cooldownRemaining / 1000)}s`}
+                    Train{" "}
+                    {atCap
+                      ? "— at cap, win or lose a match to change it"
+                      : cooldownRemaining > 0 && `— next in ${Math.ceil(cooldownRemaining / 1000)}s`}
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
                     {myUnknown.map((f) => (
                       <button
                         key={f.id}
                         onClick={() => handleTrain(f.id)}
-                        disabled={cooldownRemaining > 0}
+                        disabled={cooldownRemaining > 0 || atCap}
                         className="text-left text-xs px-3 py-2 border border-border bg-surface text-muted-foreground hover:text-foreground hover:border-signal disabled:opacity-40 disabled:cursor-not-allowed transition"
                       >
                         {f.q}
@@ -407,7 +449,12 @@ export default function Home() {
                   <span className="text-muted-foreground">
                     {" "}
                     · {f.decidedByKnowledge ? "knew the answer" : "won on stats"} · +{f.ratingDelta}
-                  </span>
+                  </span>{" "}
+                  {f.explorerUrl && (
+                    <a href={f.explorerUrl} target="_blank" rel="noreferrer" className="text-signal underline">
+                      tx
+                    </a>
+                  )}
                 </span>
                 <span className="text-muted-foreground shrink-0">{timeAgo(f.at)}</span>
               </li>

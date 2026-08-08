@@ -1,4 +1,4 @@
-import { decodeEventLog } from "viem";
+import { decodeEventLog, keccak256, toBytes } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { publicClient, getRelayerClient, arenaAbi, getArenaAddress, monadTestnet } from "./chain";
 import { generateAgentFromPrompt } from "./statGen";
@@ -17,8 +17,17 @@ export interface OnChainAgent {
   losses: number;
   rating: number;
   knowledge: number;
+  knowledgeCap: number;
+  lastFactTaught: number;
   createdAt: string;
   lastTrainedAt: string;
+}
+
+/// The exact bytes32 the contract uses as this agent's permanent identity — it's
+/// keccak256(name), the same hash that binds the name in `nameToId`, so the name and the
+/// hash are always mutually verifiable.
+export function nameHashOf(name: string): `0x${string}` {
+  return keccak256(toBytes(name));
 }
 
 export async function fetchAgents(): Promise<OnChainAgent[]> {
@@ -47,6 +56,8 @@ export async function fetchAgents(): Promise<OnChainAgent[]> {
     losses: a.losses,
     rating: a.rating,
     knowledge: a.knowledge,
+    knowledgeCap: a.knowledgeCap,
+    lastFactTaught: a.lastFactTaught,
     createdAt: a.createdAt.toString(),
     lastTrainedAt: a.lastTrainedAt.toString(),
   }));
@@ -105,6 +116,7 @@ export async function createAgentOnChain(name: string, prompt: string, factIds: 
   return {
     agentId,
     owner: ownerAccount.address,
+    nameHash: nameHashOf(cleanName),
     txHash: hash,
     explorerUrl: `${monadTestnet.blockExplorers.default.url}/tx/${hash}`,
     stats,

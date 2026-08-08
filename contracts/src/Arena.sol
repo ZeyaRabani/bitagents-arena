@@ -20,6 +20,8 @@ contract Arena {
         uint32 losses;
         uint32 rating;
         uint32 knowledge; // bitmask over FACT_COUNT facts
+        uint8 knowledgeCap; // how many facts this agent may know right now
+        uint8 lastFactTaught; // most recent train() target, used to enforce parity on a win
         uint64 createdAt;
         uint64 lastTrainedAt;
     }
@@ -32,6 +34,9 @@ contract Arena {
     uint32 public constant STARTING_RATING = 1000;
     uint32 public constant MIN_RATING = 100;
     uint256 public constant K_FACTOR = 40;
+    uint8 public constant BASE_KNOWLEDGE_CAP = 5;
+    uint8 public constant COMEBACK_KNOWLEDGE_CAP = 6;
+    uint8 internal constant NO_FACT = type(uint8).max;
 
     mapping(uint256 => Agent) public agents;
     uint256[] public agentIds;
@@ -95,6 +100,7 @@ contract Arena {
     ) external onlyRelayer returns (uint256 id) {
         require(attack > 0 && defense > 0 && speed > 0, "Arena: zero stat");
         require(bytes(name).length > 0, "Arena: empty name");
+        require(_popcount(initialKnowledge) <= BASE_KNOWLEDGE_CAP, "Arena: too much starting knowledge");
         bytes32 nameHash = keccak256(bytes(name));
         require(nameToId[nameHash] == 0, "Arena: name taken");
 
@@ -112,6 +118,8 @@ contract Arena {
             losses: 0,
             rating: STARTING_RATING,
             knowledge: initialKnowledge,
+            knowledgeCap: BASE_KNOWLEDGE_CAP,
+            lastFactTaught: NO_FACT,
             createdAt: uint64(block.timestamp),
             lastTrainedAt: uint64(block.timestamp)
         });
@@ -128,10 +136,12 @@ contract Arena {
         require(a.id != 0, "Arena: unknown agent");
         require(factId < FACT_COUNT, "Arena: bad fact id");
         require(block.timestamp >= a.lastTrainedAt + TRAIN_COOLDOWN, "Arena: cooldown");
+        require(_popcount(a.knowledge) < a.knowledgeCap, "Arena: at knowledge cap");
         uint32 bit = uint32(1) << factId;
         require(a.knowledge & bit == 0, "Arena: already known");
 
         a.knowledge |= bit;
+        a.lastFactTaught = factId;
         a.lastTrainedAt = uint64(block.timestamp);
 
         emit AgentTrained(agentId, factId, a.knowledge);
@@ -188,6 +198,23 @@ contract Arena {
         winner.wins += 1;
         loser.losses += 1;
 
+        // Parity: a loss earns a comeback 6th training slot; a win that was riding that
+        // 6th slot resets back to the base 5 and forgets whatever was taught into it.
+        if (loser.knowledgeCap < COMEBACK_KNOWLEDGE_CAP) {
+            loser.knowledgeCap = COMEBACK_KNOWLEDGE_CAP;
+        }
+        if (winner.knowledgeCap == COMEBACK_KNOWLEDGE_CAP) {
+            winner.knowledgeCap = BASE_KNOWLEDGE_CAP;
+            if (
+                _popcount(winner.knowledge) > BASE_KNOWLEDGE_CAP &&
+                winner.lastFactTaught != NO_FACT &&
+                (winner.knowledge >> winner.lastFactTaught) & 1 == 1
+            ) {
+                winner.knowledge &= ~(uint32(1) << winner.lastFactTaught);
+                winner.lastFactTaught = NO_FACT;
+            }
+        }
+
         uint256 ratingDelta = _ratingDelta(winner.rating, loser.rating);
         winner.rating = uint32(uint256(winner.rating) + ratingDelta);
         loser.rating = loser.rating > ratingDelta + MIN_RATING
@@ -234,6 +261,13 @@ contract Arena {
             }
         }
         return 5000;
+    }
+
+    function _popcount(uint32 x) internal pure returns (uint8 count) {
+        while (x != 0) {
+            x &= x - 1;
+            count++;
+        }
     }
 
     function getAgent(uint256 id) external view returns (Agent memory) {
