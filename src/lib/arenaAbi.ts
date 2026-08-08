@@ -6,6 +6,13 @@ export const arenaAbi = [
   },
   {
     type: "function",
+    name: "isNameTaken",
+    stateMutability: "view",
+    inputs: [{ name: "name", type: "string" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
     name: "createAgent",
     stateMutability: "nonpayable",
     inputs: [
@@ -16,8 +23,19 @@ export const arenaAbi = [
       { name: "attack", type: "uint8" },
       { name: "defense", type: "uint8" },
       { name: "speed", type: "uint8" },
+      { name: "initialKnowledge", type: "uint32" },
     ],
     outputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "train",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "agentId", type: "uint256" },
+      { name: "factId", type: "uint8" },
+    ],
+    outputs: [],
   },
   {
     type: "function",
@@ -55,7 +73,10 @@ export const arenaAbi = [
           { name: "speed", type: "uint8" },
           { name: "wins", type: "uint32" },
           { name: "losses", type: "uint32" },
+          { name: "rating", type: "uint32" },
+          { name: "knowledge", type: "uint32" },
           { name: "createdAt", type: "uint64" },
+          { name: "lastTrainedAt", type: "uint64" },
         ],
       },
     ],
@@ -63,6 +84,20 @@ export const arenaAbi = [
   {
     type: "function",
     name: "totalAgents",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "TRAIN_COOLDOWN",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "FACT_COUNT",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
@@ -78,6 +113,16 @@ export const arenaAbi = [
       { name: "attack", type: "uint8", indexed: false },
       { name: "defense", type: "uint8", indexed: false },
       { name: "speed", type: "uint8", indexed: false },
+      { name: "knowledge", type: "uint32", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "AgentTrained",
+    inputs: [
+      { name: "id", type: "uint256", indexed: true },
+      { name: "factId", type: "uint8", indexed: false },
+      { name: "knowledge", type: "uint32", indexed: false },
     ],
   },
   {
@@ -86,8 +131,13 @@ export const arenaAbi = [
     inputs: [
       { name: "winnerId", type: "uint256", indexed: true },
       { name: "loserId", type: "uint256", indexed: true },
+      { name: "factId", type: "uint8", indexed: false },
+      { name: "decidedByKnowledge", type: "bool", indexed: false },
       { name: "winnerRoll", type: "uint256", indexed: false },
       { name: "loserRoll", type: "uint256", indexed: false },
+      { name: "ratingDelta", type: "uint256", indexed: false },
+      { name: "winnerRatingAfter", type: "uint32", indexed: false },
+      { name: "loserRatingAfter", type: "uint32", indexed: false },
       { name: "timestamp", type: "uint256", indexed: false },
     ],
   },

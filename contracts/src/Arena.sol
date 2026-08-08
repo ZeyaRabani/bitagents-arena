@@ -2,9 +2,10 @@
 pragma solidity ^0.8.24;
 
 /// @title Arena - BitAgents on-chain battler
-/// @notice Players spawn AI-flavored agents (stats derived off-chain from a prompt)
-///         and pit them against each other. Combat is resolved fully on-chain so every
-///         fight and every leaderboard position is independently verifiable.
+/// @notice Players spawn AI-flavored agents, teach them facts from a shared pool, and
+///         pit them against each other. Whoever taught the drawn fact wins the round;
+///         if it's a knowledge tie, stats settle it. Every result updates a real Elo
+///         rating, fully on-chain and independently verifiable.
 contract Arena {
     struct Agent {
         uint256 id;
@@ -17,14 +18,24 @@ contract Arena {
         uint8 speed;
         uint32 wins;
         uint32 losses;
+        uint32 rating;
+        uint32 knowledge; // bitmask over FACT_COUNT facts
         uint64 createdAt;
+        uint64 lastTrainedAt;
     }
 
     address public relayer;
     uint256 public nextId = 1;
 
+    uint256 public constant FACT_COUNT = 32;
+    uint256 public constant TRAIN_COOLDOWN = 45 seconds;
+    uint32 public constant STARTING_RATING = 1000;
+    uint32 public constant MIN_RATING = 100;
+    uint256 public constant K_FACTOR = 40;
+
     mapping(uint256 => Agent) public agents;
     uint256[] public agentIds;
+    mapping(bytes32 => uint256) public nameToId;
 
     event AgentCreated(
         uint256 indexed id,
@@ -33,14 +44,22 @@ contract Arena {
         string ability,
         uint8 attack,
         uint8 defense,
-        uint8 speed
+        uint8 speed,
+        uint32 knowledge
     );
+
+    event AgentTrained(uint256 indexed id, uint8 factId, uint32 knowledge);
 
     event BattleResolved(
         uint256 indexed winnerId,
         uint256 indexed loserId,
+        uint8 factId,
+        bool decidedByKnowledge,
         uint256 winnerRoll,
         uint256 loserRoll,
+        uint256 ratingDelta,
+        uint32 winnerRatingAfter,
+        uint32 loserRatingAfter,
         uint256 timestamp
     );
 
@@ -53,13 +72,17 @@ contract Arena {
         relayer = _relayer;
     }
 
-    /// @notice Change the relayer allowed to submit gasless actions on players' behalf.
     function setRelayer(address _relayer) external onlyRelayer {
         relayer = _relayer;
     }
 
-    /// @notice Create a new agent. Called by the relayer on behalf of a player so the
-    ///         player never needs to hold MON or sign a transaction themselves.
+    function isNameTaken(string calldata name) external view returns (bool) {
+        return nameToId[keccak256(bytes(name))] != 0;
+    }
+
+    /// @notice Create a new agent, permanently binding `name` to its id/hash so nobody
+    ///         else can claim that name. `initialKnowledge` is a bitmask of facts taught
+    ///         during onboarding (bounded client-side to a small starting budget).
     function createAgent(
         address owner,
         string calldata name,
@@ -67,9 +90,13 @@ contract Arena {
         string calldata flavor,
         uint8 attack,
         uint8 defense,
-        uint8 speed
+        uint8 speed,
+        uint32 initialKnowledge
     ) external onlyRelayer returns (uint256 id) {
         require(attack > 0 && defense > 0 && speed > 0, "Arena: zero stat");
+        require(bytes(name).length > 0, "Arena: empty name");
+        bytes32 nameHash = keccak256(bytes(name));
+        require(nameToId[nameHash] == 0, "Arena: name taken");
 
         id = nextId++;
         agents[id] = Agent({
@@ -83,17 +110,36 @@ contract Arena {
             speed: speed,
             wins: 0,
             losses: 0,
-            createdAt: uint64(block.timestamp)
+            rating: STARTING_RATING,
+            knowledge: initialKnowledge,
+            createdAt: uint64(block.timestamp),
+            lastTrainedAt: uint64(block.timestamp)
         });
         agentIds.push(id);
+        nameToId[nameHash] = id;
 
-        emit AgentCreated(id, owner, name, ability, attack, defense, speed);
+        emit AgentCreated(id, owner, name, ability, attack, defense, speed, initialKnowledge);
     }
 
-    /// @notice Resolve a battle between two existing agents.
-    /// @dev Deterministic on-chain "dice roll": each side's power is combined with a
-    ///      pseudo-random roll seeded by chain state + both agent ids, so the outcome is
-    ///      unknown beforehand but fully reproducible/auditable after the fact.
+    /// @notice Teach an agent one more fact from the shared pool. Cooldown-gated so
+    ///         training paces out over the event instead of being spammable.
+    function train(uint256 agentId, uint8 factId) external onlyRelayer {
+        Agent storage a = agents[agentId];
+        require(a.id != 0, "Arena: unknown agent");
+        require(factId < FACT_COUNT, "Arena: bad fact id");
+        require(block.timestamp >= a.lastTrainedAt + TRAIN_COOLDOWN, "Arena: cooldown");
+        uint32 bit = uint32(1) << factId;
+        require(a.knowledge & bit == 0, "Arena: already known");
+
+        a.knowledge |= bit;
+        a.lastTrainedAt = uint64(block.timestamp);
+
+        emit AgentTrained(agentId, factId, a.knowledge);
+    }
+
+    /// @notice Resolve a battle. A fact is drawn pseudo-randomly; whichever agent was
+    ///         taught it wins outright. If both or neither know it, attack/speed stats
+    ///         (with a random roll) decide instead. Elo ratings update either way.
     function battle(uint256 idA, uint256 idB) external returns (uint256 winnerId, uint256 loserId) {
         require(idA != idB, "Arena: same agent");
         Agent storage a = agents[idA];
@@ -106,15 +152,25 @@ contract Arena {
             )
         );
 
-        uint256 rollA = (seed % 50) + a.attack * 3 + a.speed;
-        uint256 rollB = ((seed >> 128) % 50) + b.attack * 3 + b.speed;
+        uint8 factId = uint8(seed % FACT_COUNT);
+        bool aKnows = (a.knowledge >> factId) & 1 == 1;
+        bool bKnows = (b.knowledge >> factId) & 1 == 1;
 
+        uint256 rollA = (seed % 50) + uint256(a.attack) * 3 + a.speed;
+        uint256 rollB = ((seed >> 128) % 50) + uint256(b.attack) * 3 + b.speed;
         rollA = rollA > b.defense ? rollA - b.defense / 2 : rollA;
         rollB = rollB > a.defense ? rollB - a.defense / 2 : rollB;
 
+        bool decidedByKnowledge = aKnows != bKnows;
         uint256 winnerRoll;
         uint256 loserRoll;
-        if (rollA >= rollB) {
+
+        if (decidedByKnowledge) {
+            winnerId = aKnows ? idA : idB;
+            loserId = aKnows ? idB : idA;
+            winnerRoll = aKnows ? rollA : rollB;
+            loserRoll = aKnows ? rollB : rollA;
+        } else if (rollA >= rollB) {
             winnerId = idA;
             loserId = idB;
             winnerRoll = rollA;
@@ -126,22 +182,72 @@ contract Arena {
             loserRoll = rollA;
         }
 
-        agents[winnerId].wins += 1;
-        agents[loserId].losses += 1;
+        Agent storage winner = agents[winnerId];
+        Agent storage loser = agents[loserId];
 
-        emit BattleResolved(winnerId, loserId, winnerRoll, loserRoll, block.timestamp);
+        winner.wins += 1;
+        loser.losses += 1;
+
+        uint256 ratingDelta = _ratingDelta(winner.rating, loser.rating);
+        winner.rating = uint32(uint256(winner.rating) + ratingDelta);
+        loser.rating = loser.rating > ratingDelta + MIN_RATING
+            ? uint32(uint256(loser.rating) - ratingDelta)
+            : MIN_RATING;
+
+        emit BattleResolved(
+            winnerId,
+            loserId,
+            factId,
+            decidedByKnowledge,
+            winnerRoll,
+            loserRoll,
+            ratingDelta,
+            winner.rating,
+            loser.rating,
+            block.timestamp
+        );
+    }
+
+    /// @dev Elo rating delta for the winner, using a piecewise-linear approximation of
+    ///      the standard logistic expectancy curve (Solidity has no cheap fixed-point exp).
+    function _ratingDelta(uint32 winnerRating, uint32 loserRating) internal pure returns (uint256) {
+        int256 diff = int256(uint256(winnerRating)) - int256(uint256(loserRating));
+        uint256 expectedBP = _expectedScoreBP(diff);
+        uint256 changeBP = 10000 - expectedBP; // actual score for a win = 10000 bp
+        return (K_FACTOR * changeBP) / 10000;
+    }
+
+    function _expectedScoreBP(int256 diff) internal pure returns (uint256) {
+        if (diff <= -400) return 900;
+        if (diff >= 400) return 9100;
+
+        int256[9] memory xs = [int256(-400), -300, -200, -100, 0, 100, 200, 300, 400];
+        uint256[9] memory ys = [uint256(900), 1500, 2400, 3600, 5000, 6400, 7600, 8500, 9100];
+
+        for (uint256 i = 0; i < 8; i++) {
+            if (diff >= xs[i] && diff <= xs[i + 1]) {
+                int256 span = xs[i + 1] - xs[i];
+                int256 offset = diff - xs[i];
+                uint256 yLo = ys[i];
+                uint256 yHi = ys[i + 1];
+                return yLo + (uint256(offset) * (yHi - yLo)) / uint256(span);
+            }
+        }
+        return 5000;
     }
 
     function getAgent(uint256 id) external view returns (Agent memory) {
         return agents[id];
     }
 
+    function getAgentByName(string calldata name) external view returns (Agent memory) {
+        return agents[nameToId[keccak256(bytes(name))]];
+    }
+
     function totalAgents() external view returns (uint256) {
         return agentIds.length;
     }
 
-    /// @notice Paginated fetch so the frontend can page through the roster without
-    ///         needing an indexer.
     function getAgents(uint256 offset, uint256 limit) external view returns (Agent[] memory page) {
         uint256 total = agentIds.length;
         if (offset >= total) {
