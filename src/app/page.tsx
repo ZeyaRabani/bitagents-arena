@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { FACT_POOL, MAX_STARTING_FACTS, bitmaskToFacts } from "@/lib/factPool";
 
 const TRAIN_COOLDOWN_MS = 45_000;
@@ -288,6 +289,7 @@ export default function Home() {
   const [battleOpponent, setBattleOpponent] = useState<Agent | null>(null);
   const [battleSelf, setBattleSelf] = useState<Agent | null>(null);
   const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
+  const [siteUrl, setSiteUrl] = useState("");
   const lastHandledBattleAt = useRef<number>(0);
   const searchStartedAt = useRef<number>(0);
   const toastedAtRef = useRef<number | null>(null);
@@ -308,6 +310,7 @@ export default function Home() {
       }
     }
     setHydrated(true);
+    setSiteUrl(window.location.origin);
   }, []);
 
   function setMyAgent(agent: MyAgent | null) {
@@ -798,6 +801,18 @@ export default function Home() {
         onContinue={closeBattleModal}
         onCancelSearch={handleCancelSearch}
       />
+
+      {siteUrl && (
+        <div className="hidden lg:flex fixed top-24 right-6 z-30 flex-col items-center gap-3 border border-border bg-card p-4 w-48 ba-fade-in">
+          <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground text-center">
+            Scan to join the arena
+          </p>
+          <div className="bg-white p-2">
+            <QRCodeSVG value={siteUrl} size={140} bgColor="#ffffff" fgColor="#0c0a09" />
+          </div>
+          <p className="font-mono text-[10px] text-muted-foreground text-center break-all">{siteUrl}</p>
+        </div>
+      )}
 
       <div className="fixed top-4 right-4 z-40 flex flex-col gap-2 max-w-xs">
         {toasts.map((t) => (
