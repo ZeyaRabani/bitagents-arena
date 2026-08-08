@@ -104,12 +104,15 @@ export default function Home() {
   const leaderboard = [...agents].sort((a, b) => b.wins - a.wins).slice(0, 5);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-indigo-950 via-slate-950 to-black text-white p-6 md:p-10">
-      <header className="max-w-5xl mx-auto text-center mb-8">
-        <h1 className="text-4xl md:text-6xl font-black tracking-tight bg-gradient-to-r from-fuchsia-400 via-violet-400 to-cyan-400 bg-clip-text text-transparent">
-          BITAGENTS ARENA
+    <div className="min-h-screen bg-background text-foreground p-6 md:p-10">
+      <header className="max-w-5xl mx-auto text-center mb-10">
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground mb-2">
+          Monad Testnet · Live
+        </p>
+        <h1 className="font-display text-4xl md:text-6xl font-bold tracking-tight text-foreground">
+          BITAGENTS <span className="text-signal">ARENA</span>
         </h1>
-        <p className="text-slate-400 mt-2">
+        <p className="text-muted-foreground mt-3">
           Describe an AI agent. It fights on-chain on Monad, live, in under a second. No wallet needed.
         </p>
       </header>
@@ -121,85 +124,84 @@ export default function Home() {
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g. a caffeinated hedgehog that only attacks in the morning"
             maxLength={200}
-            className="flex-1 rounded-xl bg-white/10 border border-white/20 px-4 py-3 outline-none focus:border-fuchsia-400 placeholder:text-slate-500"
+            className="flex-1 border border-border bg-surface px-4 py-3 outline-none focus:border-signal placeholder:text-muted-foreground"
           />
           <button
             type="submit"
             disabled={creating || !prompt.trim()}
-            className="rounded-xl px-6 py-3 font-bold bg-gradient-to-r from-fuchsia-500 to-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
+            className="px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition"
           >
             {creating ? "Spawning..." : "Spawn Agent"}
           </button>
         </form>
 
         {error && (
-          <div className="rounded-lg bg-red-500/20 border border-red-500/40 px-4 py-2 text-red-200 text-sm">
+          <div className="border border-destructive/40 bg-destructive/10 px-4 py-2 text-destructive text-sm">
             {error}
           </div>
         )}
 
         {lastResult && (
-          <div className="rounded-xl bg-emerald-500/10 border border-emerald-400/30 px-4 py-3 text-sm">
-            <span className="font-bold text-emerald-300">
-              Agent #{lastResult.winnerId}
-            </span>{" "}
+          <div className="border border-signal/30 bg-signal/10 px-4 py-3 text-sm">
+            <span className="font-bold text-signal">Agent #{lastResult.winnerId}</span>{" "}
             beat Agent #{lastResult.loserId} ({lastResult.winnerRoll} vs {lastResult.loserRoll}) —{" "}
-            <a href={lastResult.explorerUrl} target="_blank" rel="noreferrer" className="underline text-cyan-300">
+            <a href={lastResult.explorerUrl} target="_blank" rel="noreferrer" className="underline text-warn">
               view tx
             </a>
           </div>
         )}
 
         <section>
-          <h2 className="text-xl font-bold mb-3 text-slate-200">
-            Arena {selected && <span className="text-fuchsia-400">— pick an opponent for #{selected}</span>}
-            {battling && <span className="text-cyan-400"> — battling on-chain...</span>}
+          <h2 className="font-display text-xl font-bold mb-3">
+            Arena{" "}
+            {selected && <span className="text-signal font-mono text-sm">— pick an opponent for #{selected}</span>}
+            {battling && <span className="text-warn font-mono text-sm"> — battling on-chain...</span>}
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px border border-border bg-border">
             {agents.map((a) => (
               <button
                 key={a.id}
                 onClick={() => handlePick(a.id)}
                 disabled={battling}
-                className={`text-left rounded-xl p-4 border transition bg-white/5 hover:bg-white/10 ${
-                  selected === a.id ? "border-fuchsia-400 ring-2 ring-fuchsia-400" : "border-white/10"
+                className={`text-left bg-card p-4 transition hover:bg-surface-2 ${
+                  selected === a.id ? "ring-2 ring-signal ring-inset" : ""
                 }`}
               >
                 <div className="flex justify-between items-start">
-                  <h3 className="font-bold text-lg">{a.name}</h3>
-                  <span className="text-xs text-slate-400">#{a.id}</span>
+                  <h3 className="font-display font-bold text-lg">{a.name}</h3>
+                  <span className="font-mono text-xs text-muted-foreground">#{a.id}</span>
                 </div>
-                <p className="text-xs text-fuchsia-300 mb-1">{a.ability}</p>
-                <p className="text-xs text-slate-400 italic mb-2 line-clamp-2">{a.flavor}</p>
-                <div className="flex gap-3 text-xs text-slate-300">
+                <p className="font-mono text-xs text-signal mb-1 uppercase tracking-wide">{a.ability}</p>
+                <p className="text-xs text-muted-foreground italic mb-2 line-clamp-2">{a.flavor}</p>
+                <div className="flex gap-3 font-mono text-xs text-foreground/80">
                   <span>ATK {a.attack}</span>
                   <span>DEF {a.defense}</span>
                   <span>SPD {a.speed}</span>
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
+                <div className="mt-2 font-mono text-xs text-muted-foreground">
                   {a.wins}W - {a.losses}L
                 </div>
               </button>
             ))}
             {agents.length === 0 && (
-              <p className="text-slate-500 text-sm">No agents yet — spawn the first one above.</p>
+              <p className="text-muted-foreground text-sm bg-card p-4">No agents yet — spawn the first one above.</p>
             )}
           </div>
         </section>
 
         <section>
-          <h2 className="text-xl font-bold mb-3 text-slate-200">Leaderboard</h2>
-          <ol className="grid gap-2">
+          <h2 className="font-display text-xl font-bold mb-3">Leaderboard</h2>
+          <ol className="grid gap-px border border-border bg-border">
             {leaderboard.map((a, i) => (
-              <li key={a.id} className="flex justify-between rounded-lg bg-white/5 px-4 py-2 text-sm">
+              <li key={a.id} className="flex justify-between bg-card px-4 py-2 text-sm">
                 <span>
-                  <span className="text-slate-500 mr-2">#{i + 1}</span>
+                  <span className="font-mono text-muted-foreground mr-2">#{i + 1}</span>
                   {a.name}
                 </span>
-                <span className="text-emerald-400">{a.wins}W</span>
+                <span className="font-mono text-signal">{a.wins}W</span>
               </li>
             ))}
-            {leaderboard.length === 0 && <p className="text-slate-500 text-sm">No battles yet.</p>}
+            {leaderboard.length === 0 && <p className="text-muted-foreground text-sm bg-card px-4 py-2">No battles yet.</p>}
           </ol>
         </section>
       </main>
