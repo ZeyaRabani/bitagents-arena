@@ -78,9 +78,9 @@ type BattlePhase = "idle" | "searching" | "found" | "starting" | "clash" | "resu
 const MIN_SEARCH_MS = 3000;
 
 const PHASE_DURATIONS: Partial<Record<BattlePhase, number>> = {
-  found: 1400,
-  starting: 1200,
-  clash: 900,
+  found: 2800,
+  starting: 2400,
+  clash: 1800,
 };
 
 function RatingReveal({ from, to }: { from: number; to: number }) {
@@ -106,7 +106,7 @@ function StartingCountdown() {
   const [i, setI] = useState(0);
   useEffect(() => {
     if (i >= steps.length - 1) return;
-    const t = setTimeout(() => setI((v) => v + 1), 300);
+    const t = setTimeout(() => setI((v) => v + 1), 600);
     return () => clearTimeout(t);
   }, [i]);
   return (
@@ -183,6 +183,14 @@ function BattleModal({
   const myRatingAfter = entry ? (isMeWinner ? entry.winnerRatingAfter : entry.loserRatingAfter) : 0;
   const delta = entry ? Number(entry.ratingDelta) : 0;
   const myRatingBefore = isMeWinner ? myRatingAfter - delta : myRatingAfter + delta;
+
+  const factBit = entry ? 1 << entry.factId : 0;
+  const meKnewFact = !!(me && factBit && me.knowledge & factBit);
+  const oppKnewFact = !!(opponent && factBit && opponent.knowledge & factBit);
+  const statsExplainer =
+    meKnewFact && oppKnewFact
+      ? "Both agents had been taught this, so it came down to stats"
+      : "Neither agent had been taught this, so it came down to stats";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
@@ -269,8 +277,8 @@ function BattleModal({
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {entry.decidedByKnowledge
-                    ? `${entry.winnerName} had been taught this — ${entry.loserName} hadn't.`
-                    : `Neither agent had been taught this, so stats settled it (${entry.winnerRoll} vs ${entry.loserRoll}).`}
+                    ? `${entry.winnerName} had been taught this — ${entry.loserName} hadn't. Knowledge beats stats every time.`
+                    : `${statsExplainer} — higher attack & speed wins the roll. ${entry.winnerName} scored ${entry.winnerRoll} to ${entry.loserName}'s ${entry.loserRoll}.`}
                 </p>
               </div>
             )}
@@ -311,6 +319,7 @@ export default function Home() {
   const [battleSelf, setBattleSelf] = useState<Agent | null>(null);
   const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
   const [siteUrl, setSiteUrl] = useState("");
+  const [showRules, setShowRules] = useState(false);
   const lastHandledBattleAt = useRef<number>(0);
   const searchStartedAt = useRef<number>(0);
   const toastedAtRef = useRef<number | null>(null);
@@ -571,7 +580,50 @@ export default function Home() {
         <p className="text-muted-foreground mt-3">
           Teach your agent what a stock AI doesn&apos;t know. Battle for real, on-chain, in seconds.
         </p>
+        <button
+          onClick={() => setShowRules(true)}
+          className="mt-3 font-mono text-xs uppercase tracking-wide text-signal underline hover:opacity-80"
+        >
+          How to play
+        </button>
       </header>
+
+      {showRules && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in"
+          onClick={() => setShowRules(false)}
+        >
+          <div
+            className="w-full max-w-sm border border-border bg-card p-6 ba-pop-in relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowRules(false)}
+              aria-label="Close"
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground hover:border-signal transition"
+            >
+              ✕
+            </button>
+            <h2 className="font-display text-xl font-bold mb-4">How to play</h2>
+            <ol className="grid gap-3 text-sm text-foreground/90 list-decimal list-inside">
+              <li>Name your agent and teach it up to 5 facts.</li>
+              <li>Hit Play — you&apos;ll be matched against another agent.</li>
+              <li>
+                A random question gets drawn. If only your agent was taught it, you win.
+                If neither (or both) knew it, stats decide instead.
+              </li>
+              <li>Winning and losing move your rating — climb the leaderboard.</li>
+              <li>Lose a match and you get one bonus training slot to catch up.</li>
+            </ol>
+            <button
+              onClick={() => setShowRules(false)}
+              className="w-full mt-6 px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground hover:opacity-90 transition"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-5xl mx-auto grid gap-8">
         {error && (
