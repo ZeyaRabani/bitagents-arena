@@ -116,15 +116,23 @@ function StartingCountdown() {
   );
 }
 
+interface CombatAgent {
+  name: string;
+  ability: string;
+  flavor: string;
+  knowledge: number;
+}
+
 function AgentCombatCard({
   agent,
   side,
   outcome,
 }: {
-  agent: { name: string; attack: number; defense: number; speed: number } | null;
+  agent: CombatAgent | null;
   side: "left" | "right";
   outcome?: "winner" | "loser";
 }) {
+  const knownCount = agent ? bitmaskToFacts(agent.knowledge).length : 0;
   return (
     <div
       className={`flex-1 border p-4 text-center ${side === "left" ? "ba-slide-left" : "ba-slide-right"} ${
@@ -137,10 +145,12 @@ function AgentCombatCard({
     >
       <p className="font-display text-xl font-bold truncate">{agent?.name ?? "..."}</p>
       {agent && (
-        <div className="flex justify-center gap-3 font-mono text-xs text-muted-foreground mt-2">
-          <span>ATK {agent.attack}</span>
-          <span>DEF {agent.defense}</span>
-          <span>SPD {agent.speed}</span>
+        <div className="mt-2">
+          <p className="font-mono text-[10px] uppercase tracking-wide text-signal">{agent.ability}</p>
+          <p className="text-xs text-muted-foreground italic mt-1 line-clamp-2">{agent.flavor}</p>
+          <p className="font-mono text-[10px] text-muted-foreground mt-2">
+            trained on {knownCount}/5 thing{knownCount === 1 ? "" : "s"}
+          </p>
         </div>
       )}
       {outcome === "winner" && <p className="mt-3 font-mono text-xs uppercase text-signal">Winner</p>}
@@ -156,14 +166,16 @@ function BattleModal({
   isMeWinner,
   onContinue,
   onCancelSearch,
+  onClose,
 }: {
   phase: BattlePhase;
-  me: { name: string; attack: number; defense: number; speed: number } | null;
-  opponent: { name: string; attack: number; defense: number; speed: number } | null;
+  me: CombatAgent | null;
+  opponent: CombatAgent | null;
   entry: FeedEntry | null;
   isMeWinner: boolean;
   onContinue: () => void;
   onCancelSearch: () => void;
+  onClose: () => void;
 }) {
   if (phase === "idle") return null;
 
@@ -174,6 +186,15 @@ function BattleModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
+      {phase !== "searching" && (
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-6 right-6 w-9 h-9 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground hover:border-signal transition"
+        >
+          ✕
+        </button>
+      )}
       <div className="w-full max-w-lg">
         {phase === "searching" && (
           <div className="text-center ba-fade-in">
@@ -391,15 +412,6 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [feed, battlePhase, myAgent, agents]);
 
-  // auto-advance the battle sequence through its theatrical beats
-  useEffect(() => {
-    const duration = PHASE_DURATIONS[battlePhase];
-    if (!duration) return;
-    const next: Record<string, BattlePhase> = { found: "starting", starting: "clash", clash: "result" };
-    const t = setTimeout(() => setBattlePhase(next[battlePhase]), duration);
-    return () => clearTimeout(t);
-  }, [battlePhase]);
-
   // ambient toasts for any battle happening in the arena, not just ours
   useEffect(() => {
     if (feed.length === 0) return;
@@ -427,6 +439,16 @@ export default function Home() {
     setBattleOpponent(null);
     setBattleSelf(null);
   }
+
+  // auto-advance through the animated beats (found -> starting -> clash) — the player
+  // only has to click something once the result is up, or to bail out early via X.
+  useEffect(() => {
+    const duration = PHASE_DURATIONS[battlePhase];
+    if (!duration) return;
+    const next: Partial<Record<BattlePhase, BattlePhase>> = { found: "starting", starting: "clash", clash: "result" };
+    const t = setTimeout(() => setBattlePhase(next[battlePhase]!), duration);
+    return () => clearTimeout(t);
+  }, [battlePhase]);
 
   async function handleCancelSearch() {
     if (myAgent) {
@@ -800,6 +822,7 @@ export default function Home() {
         isMeWinner={battleEntry?.winnerId === myAgent?.id}
         onContinue={closeBattleModal}
         onCancelSearch={handleCancelSearch}
+        onClose={closeBattleModal}
       />
 
       {siteUrl && (

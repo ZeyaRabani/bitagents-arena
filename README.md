@@ -55,12 +55,19 @@ Requires a `.env.local` (gitignored — not committed, since it holds a relayer 
 key):
 
 ```
-MONAD_TESTNET_RPC_URL=https://testnet-rpc.monad.xyz
+MONAD_TESTNET_RPC_URL=https://rpc.ankr.com/monad_testnet  # see note below
 MONAD_TESTNET_CHAIN_ID=10143
 RELAYER_PRIVATE_KEY=0x...            # pays gas for every player action
 NEXT_PUBLIC_RELAYER_ADDRESS=0x...
 NEXT_PUBLIC_ARENA_CONTRACT_ADDRESS=0x...
 ```
+
+> **RPC note**: `testnet-rpc.monad.xyz` is heavily shared and easy to rate-limit
+> (15 req/sec) once more than a couple of people are actively playing — we hit this live
+> during the hackathon and it silently broke matchmaking. `fetchAgents()` in
+> `src/lib/arenaActions.ts` already caches + retries to absorb this, but swapping to
+> `rpc.ankr.com/monad_testnet` (or another dedicated endpoint) removes the problem
+> entirely under real concurrent load.
 
 ## Contracts
 

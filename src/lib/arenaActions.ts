@@ -35,16 +35,16 @@ export function nameHashOf(name: string): `0x${string}` {
 // more than a handful of concurrent players that blows through the limit and silently
 // breaks matchmaking (fetchAgents throws, the tick aborts, nobody gets paired). Cache
 // briefly and de-dupe concurrent callers onto a single in-flight request.
-const AGENTS_CACHE_TTL_MS = 2500;
+const AGENTS_CACHE_TTL_MS = 4000;
 let agentsCache: { at: number; data: OnChainAgent[] } | null = null;
 let agentsInFlight: Promise<OnChainAgent[]> | null = null;
 
-async function withRpcRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+async function withRpcRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
   try {
     return await fn();
   } catch (err) {
     if (retries <= 0) throw err;
-    await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
+    await new Promise((r) => setTimeout(r, 400 + Math.random() * 500));
     return withRpcRetry(fn, retries - 1);
   }
 }
@@ -110,12 +110,14 @@ export function invalidateAgentsCache() {
 }
 
 export async function isNameTaken(name: string): Promise<boolean> {
-  return publicClient.readContract({
-    address: getArenaAddress(),
-    abi: arenaAbi,
-    functionName: "isNameTaken",
-    args: [name],
-  });
+  return withRpcRetry(() =>
+    publicClient.readContract({
+      address: getArenaAddress(),
+      abi: arenaAbi,
+      functionName: "isNameTaken",
+      args: [name],
+    })
+  );
 }
 
 export async function createAgentOnChain(name: string, prompt: string, factIds: number[]) {
