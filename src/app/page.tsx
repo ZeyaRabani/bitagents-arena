@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FACT_POOL, MAX_STARTING_FACTS, bitmaskToFacts } from "@/lib/factPool";
 
 const TRAIN_COOLDOWN_MS = 45_000;
@@ -70,6 +70,132 @@ function timeAgo(ts: number) {
   return `${Math.floor(s / 60)}m ago`;
 }
 
+type BattlePhase = "idle" | "found" | "starting" | "clash" | "result";
+
+const PHASE_DURATIONS: Partial<Record<BattlePhase, number>> = {
+  found: 1400,
+  starting: 1200,
+  clash: 900,
+};
+
+function AgentCombatCard({
+  agent,
+  side,
+  outcome,
+}: {
+  agent: { name: string; attack: number; defense: number; speed: number } | null;
+  side: "left" | "right";
+  outcome?: "winner" | "loser";
+}) {
+  return (
+    <div
+      className={`flex-1 border p-4 text-center ${side === "left" ? "ba-slide-left" : "ba-slide-right"} ${
+        outcome === "winner"
+          ? "border-signal bg-signal/10"
+          : outcome === "loser"
+            ? "border-border bg-surface opacity-50"
+            : "border-border bg-surface"
+      }`}
+    >
+      <p className="font-display text-xl font-bold truncate">{agent?.name ?? "..."}</p>
+      {agent && (
+        <div className="flex justify-center gap-3 font-mono text-xs text-muted-foreground mt-2">
+          <span>ATK {agent.attack}</span>
+          <span>DEF {agent.defense}</span>
+          <span>SPD {agent.speed}</span>
+        </div>
+      )}
+      {outcome === "winner" && <p className="mt-3 font-mono text-xs uppercase text-signal">Winner</p>}
+    </div>
+  );
+}
+
+function BattleModal({
+  phase,
+  me,
+  opponent,
+  entry,
+  isMeWinner,
+  onContinue,
+}: {
+  phase: BattlePhase;
+  me: { name: string; attack: number; defense: number; speed: number } | null;
+  opponent: { name: string; attack: number; defense: number; speed: number } | null;
+  entry: FeedEntry | null;
+  isMeWinner: boolean;
+  onContinue: () => void;
+}) {
+  if (phase === "idle") return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
+      <div className="w-full max-w-lg">
+        {(phase === "found" || phase === "starting" || phase === "clash") && (
+          <>
+            <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4 ba-fade-in">
+              {phase === "found" && "Opponent found"}
+              {phase === "starting" && "Get ready"}
+              {phase === "clash" && "Fighting on-chain..."}
+            </p>
+            <div className={`flex items-center gap-3 ${phase === "clash" ? "ba-shake" : ""}`}>
+              <AgentCombatCard agent={me} side="left" />
+              <span className="font-display text-2xl font-black text-signal shrink-0">VS</span>
+              <AgentCombatCard agent={opponent} side="right" />
+            </div>
+            {phase === "starting" && (
+              <p className="text-center font-display text-3xl font-black mt-6 text-signal ba-pop-in">
+                AGENT BATTLE STARTS
+              </p>
+            )}
+            {phase === "clash" && (
+              <p className="text-center font-mono text-sm mt-6 text-muted-foreground ba-flash">
+                resolving on Monad testnet...
+              </p>
+            )}
+          </>
+        )}
+
+        {phase === "result" && entry && (
+          <div className="ba-pop-in">
+            <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4">
+              Battle resolved
+            </p>
+            <div className="flex items-center gap-3">
+              <AgentCombatCard agent={me} side="left" outcome={isMeWinner ? "winner" : "loser"} />
+              <span className="font-display text-2xl font-black text-muted-foreground shrink-0">VS</span>
+              <AgentCombatCard agent={opponent} side="right" outcome={isMeWinner ? "loser" : "winner"} />
+            </div>
+            <div className="text-center mt-6">
+              <p className="font-display text-2xl font-black">
+                {isMeWinner ? "🏆 You won" : "Defeated"}
+              </p>
+              <p className="font-mono text-sm text-muted-foreground mt-1">
+                {entry.decidedByKnowledge ? "Decided by knowledge" : "Decided by stats"} ·{" "}
+                {isMeWinner ? "+" : "-"}
+                {entry.ratingDelta} rating
+              </p>
+              <a
+                href={entry.explorerUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-xs text-signal underline mt-1 inline-block"
+              >
+                view battle tx
+              </a>
+            </div>
+            <button
+              onClick={onContinue}
+              className="w-full mt-6 px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground hover:opacity-90 transition"
+            >
+              Continue
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [myAgent, setMyAgentState] = useState<MyAgent | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -79,6 +205,11 @@ export default function Home() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [battlePhase, setBattlePhase] = useState<BattlePhase>("idle");
+  const [battleEntry, setBattleEntry] = useState<FeedEntry | null>(null);
+  const [battleOpponent, setBattleOpponent] = useState<Agent | null>(null);
+  const [battleSelf, setBattleSelf] = useState<Agent | null>(null);
+  const lastHandledBattleAt = useRef<number>(0);
 
   // create-form state
   const [name, setName] = useState("");
@@ -150,14 +281,39 @@ export default function Home() {
     };
   }, [loadAgents, loadFeed, loadRoyale]);
 
-  // detect our queue match resolving
+  // detect our queue match resolving and kick off the dramatic reveal sequence
   useEffect(() => {
     if (!searching || !myAgent) return;
-    const mine = feed.find((f) => f.winnerId === myAgent.id || f.loserId === myAgent.id);
-    if (mine && Date.now() - mine.at < 15000) {
-      setSearching(false);
-    }
-  }, [feed, searching, myAgent]);
+    const mine = feed.find(
+      (f) => f.mode === "queue" && (f.winnerId === myAgent.id || f.loserId === myAgent.id) && f.at > lastHandledBattleAt.current
+    );
+    if (!mine) return;
+
+    lastHandledBattleAt.current = mine.at;
+    setSearching(false);
+
+    const opponentId = mine.winnerId === myAgent.id ? mine.loserId : mine.winnerId;
+    setBattleOpponent(agents.find((a) => a.id === opponentId) ?? null);
+    setBattleSelf(agents.find((a) => a.id === myAgent.id) ?? null);
+    setBattleEntry(mine);
+    setBattlePhase("found");
+  }, [feed, searching, myAgent, agents]);
+
+  // auto-advance the battle sequence through its theatrical beats
+  useEffect(() => {
+    const duration = PHASE_DURATIONS[battlePhase];
+    if (!duration) return;
+    const next: Record<string, BattlePhase> = { found: "starting", starting: "clash", clash: "result" };
+    const t = setTimeout(() => setBattlePhase(next[battlePhase]), duration);
+    return () => clearTimeout(t);
+  }, [battlePhase]);
+
+  function closeBattleModal() {
+    setBattlePhase("idle");
+    setBattleEntry(null);
+    setBattleOpponent(null);
+    setBattleSelf(null);
+  }
 
   const me = useMemo(() => agents.find((a) => a.id === myAgent?.id) ?? null, [agents, myAgent]);
   const leaderboard = useMemo(() => [...agents].sort((a, b) => b.rating - a.rating).slice(0, 8), [agents]);
@@ -365,7 +521,7 @@ export default function Home() {
                 <div className="mt-5">
                   <button
                     onClick={handlePlay}
-                    disabled={searching}
+                    disabled={searching || battlePhase !== "idle"}
                     className="w-full px-6 py-4 font-mono font-bold uppercase tracking-[0.1em] bg-signal text-primary-foreground disabled:opacity-60 hover:opacity-90 transition"
                   >
                     {searching ? "Searching for opponent..." : "Play"}
@@ -510,6 +666,15 @@ export default function Home() {
           )}
         </section>
       </main>
+
+      <BattleModal
+        phase={battlePhase}
+        me={battleSelf}
+        opponent={battleOpponent}
+        entry={battleEntry}
+        isMeWinner={battleEntry?.winnerId === myAgent?.id}
+        onContinue={closeBattleModal}
+      />
     </div>
   );
 }
