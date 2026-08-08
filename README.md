@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BitAgents Arena
 
-## Getting Started
+Describe an AI agent in one sentence. It spawns on-chain on Monad, gets stats derived
+from your prompt, and can be pitted against any other agent in the arena — resolved by
+a real transaction, live, in well under a second. No wallet, no gas, no signup.
 
-First, run the development server:
+Built for Monad Blitz London.
+
+## Why Monad
+
+Every agent creation and every battle is its own transaction on Monad Testnet. The whole
+point of the demo is that this is *usable as a live multiplayer game* — dozens of people
+can be spawning agents and fighting simultaneously and the arena updates in real time —
+which only works because of Monad's ~0.3s blocks and ~0.6s finality. The same app on a
+slower chain would feel laggy and unplayable; here it feels instant.
+
+## How it works
+
+- **`contracts/src/Arena.sol`** — on-chain agent registry + battle resolver. Combat is a
+  deterministic pseudo-random roll (seeded by chain state) weighted by each agent's
+  attack/defense/speed, so every fight is auditable after the fact but unpredictable
+  beforehand.
+- **Stat generation** (`src/lib/statGen.ts`) turns a player's free-text prompt into
+  attack/defense/speed/ability/flavor text deterministically (keyword + hash based) —
+  no external API call, so the live demo has zero dependency on a third-party service.
+- **Gasless UX**: a single server-held relayer wallet (funded from the Monad testnet
+  faucet) signs every `createAgent` / `battle` transaction on the player's behalf. The
+  player never touches a wallet — they just type a prompt and tap opponents.
+
+## Local dev
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Requires a `.env.local` (gitignored — not committed, since it holds a relayer private
+key):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+MONAD_TESTNET_RPC_URL=https://testnet-rpc.monad.xyz
+MONAD_TESTNET_CHAIN_ID=10143
+RELAYER_PRIVATE_KEY=0x...            # pays gas for every player action
+NEXT_PUBLIC_RELAYER_ADDRESS=0x...
+NEXT_PUBLIC_ARENA_CONTRACT_ADDRESS=0x...
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Contracts
 
-## Learn More
+Deployed on Monad Testnet (chain id `10143`):
 
-To learn more about Next.js, take a look at the following resources:
+- `Arena`: [`0x2E8f8506C6418457C92BCE93d25Fb75F8E5A8fa5`](https://testnet.monadscan.com/address/0x2E8f8506C6418457C92BCE93d25Fb75F8E5A8fa5)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Build/deploy with Foundry from `contracts/`:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+forge build
+forge script script/Deploy.s.sol:Deploy --rpc-url $MONAD_TESTNET_RPC_URL --broadcast
+```
 
-## Deploy on Vercel
+## Submission
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Forked from [`monad-developers/monad-blitz-london`](https://github.com/monad-developers/monad-blitz-london)
+per the [submission process](https://monad-foundation.notion.site/Submission-Process-cc66367594f2837c898701aabd948402).
+Submitted via [blitz.devnads.com](https://blitz.devnads.com).
