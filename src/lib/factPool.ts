@@ -1,46 +1,116 @@
-// Shared knowledge pool. Position in this array IS the on-chain fact id (bit index
-// in the agent's uint32 knowledge bitmask), so don't reorder existing entries —
-// only append. FACT_COUNT in Arena.sol must match this array's length.
+// Shared subject pool. Position in this array IS the on-chain fact id (bit index in the
+// agent's uint32 knowledge bitmask), so don't reorder existing entries — only append.
+// FACT_COUNT in Arena.sol must match this array's length.
+//
+// Each subject has a short display name (used for the pick/train grid and chips) plus a
+// handful of sample questions used only for flavor when showing "the question was..." in
+// a battle result — the contract only ever tracks the subject id, not which specific
+// question, so these can be edited/expanded freely without touching the contract.
 
 export interface Fact {
   id: number;
-  q: string;
-  a: string;
+  q: string; // subject name, e.g. "History"
+  a: string; // one-line description shown while picking
+  sampleQuestions: string[];
 }
 
 export const FACT_POOL: Fact[] = [
-  { id: 0, q: "What's Monad's target block time?", a: "~0.3 seconds" },
-  { id: 1, q: "What's Monad's finality time?", a: "~0.6 seconds" },
-  { id: 2, q: "Is Monad EVM bytecode compatible?", a: "Yes, 100%" },
-  { id: 3, q: "What database powers Monad's state?", a: "MonadDB" },
-  { id: 4, q: "What's Monad's consensus protocol called?", a: "MonadBFT" },
-  { id: 5, q: "What's the block propagation protocol called?", a: "RaptorCast" },
-  { id: 6, q: "What does BitAgents Arena run on?", a: "Monad Testnet" },
-  { id: 7, q: "What's the loneliest number?", a: "1" },
-  { id: 8, q: "What comes after 'to be or not to'?", a: "be" },
-  { id: 9, q: "What's the boiling point of water at sea level (C)?", a: "100°C" },
-  { id: 10, q: "How many sides does a hexagon have?", a: "6" },
-  { id: 11, q: "What's the first prime number?", a: "2" },
-  { id: 12, q: "What planet do we live on?", a: "Earth" },
-  { id: 13, q: "What's 7 x 8?", a: "56" },
-  { id: 14, q: "What does 'HODL' originally come from?", a: "A misspelling of 'hold'" },
-  { id: 15, q: "What color do you get mixing blue and yellow?", a: "Green" },
-  { id: 16, q: "What's the speed of light (approx, km/s)?", a: "300,000 km/s" },
-  { id: 17, q: "How many legs does a spider have?", a: "8" },
-  { id: 18, q: "What's the capital of France?", a: "Paris" },
-  { id: 19, q: "What does 'gwei' measure?", a: "Gas price (a denomination of ETH)" },
-  { id: 20, q: "What's a 'zorblex'?", a: "Whatever this agent's trainer decided it means" },
-  { id: 21, q: "What's the freezing point of water (C)?", a: "0°C" },
-  { id: 22, q: "How many continents are there?", a: "7" },
-  { id: 23, q: "What's the square root of 64?", a: "8" },
-  { id: 24, q: "What do bees make?", a: "Honey" },
-  { id: 25, q: "What's the tallest animal on Earth?", a: "Giraffe" },
-  { id: 26, q: "What does 'gm' mean in crypto Twitter?", a: "Good morning" },
-  { id: 27, q: "How many minutes in a day?", a: "1,440" },
-  { id: 28, q: "What's the chemical symbol for gold?", a: "Au" },
-  { id: 29, q: "What year did Bitcoin's whitepaper release?", a: "2008" },
-  { id: 30, q: "What's the opposite of 'bullish'?", a: "Bearish" },
-  { id: 31, q: "Who won this hackathon?", a: "Ask the voters" },
+  {
+    id: 0,
+    q: "History",
+    a: "Wars, empires, and the people who shaped them",
+    sampleQuestions: [
+      "What year did Bitcoin's whitepaper release?",
+      "What year did World War II end?",
+      "Who was the first person to walk on the Moon?",
+    ],
+  },
+  {
+    id: 1,
+    q: "Maths",
+    a: "Arithmetic, geometry, and everything with numbers",
+    sampleQuestions: ["What's 7 x 8?", "What's the square root of 64?", "What's the first prime number?"],
+  },
+  {
+    id: 2,
+    q: "Geography",
+    a: "Countries, capitals, and continents",
+    sampleQuestions: [
+      "What's the capital of France?",
+      "How many continents are there?",
+      "What's the tallest mountain on Earth?",
+    ],
+  },
+  {
+    id: 3,
+    q: "Science",
+    a: "Physics, chemistry, and the natural world",
+    sampleQuestions: [
+      "What's the boiling point of water at sea level (C)?",
+      "What's the chemical symbol for gold?",
+      "What's the speed of light (approx, km/s)?",
+    ],
+  },
+  {
+    id: 4,
+    q: "Monad & Crypto",
+    a: "This chain, and the ecosystem around it",
+    sampleQuestions: [
+      "What's Monad's target block time?",
+      "What database powers Monad's state?",
+      "What does 'gwei' measure?",
+    ],
+  },
+  {
+    id: 5,
+    q: "Pop Culture",
+    a: "Movies, internet culture, and the extremely online",
+    sampleQuestions: [
+      "What does 'HODL' originally come from?",
+      "What does 'gm' mean in crypto Twitter?",
+      "What comes after 'to be or not to'?",
+    ],
+  },
+  {
+    id: 6,
+    q: "Animals",
+    a: "Creatures, great and small",
+    sampleQuestions: [
+      "How many legs does a spider have?",
+      "What's the tallest animal on Earth?",
+      "What do bees make?",
+    ],
+  },
+  {
+    id: 7,
+    q: "Space",
+    a: "Planets, stars, and everything above",
+    sampleQuestions: [
+      "What planet do we live on?",
+      "How many planets are in our solar system?",
+      "What's the closest star to Earth?",
+    ],
+  },
+  {
+    id: 8,
+    q: "Food & Drink",
+    a: "What we eat, and where it comes from",
+    sampleQuestions: [
+      "What color do you get mixing blue and yellow?",
+      "What's honey made by?",
+      "What grain is bread traditionally made from?",
+    ],
+  },
+  {
+    id: 9,
+    q: "Sports",
+    a: "Games, rules, and records",
+    sampleQuestions: [
+      "How many players are on a football (soccer) team?",
+      "How often are the Summer Olympics held?",
+      "How many minutes in a day?",
+    ],
+  },
 ];
 
 export const FACT_COUNT = FACT_POOL.length;
@@ -60,6 +130,16 @@ export function bitmaskToFacts(mask: number): Fact[] {
     if ((mask >>> i) & 1) out.push(FACT_POOL[i]);
   }
   return out;
+}
+
+/** Deterministic per-battle sample question so the same fight always shows the same
+ *  question, but different fights on the same subject show variety. */
+export function pickSampleQuestion(fact: Fact, seedStr: string): string {
+  let h = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
+  }
+  return fact.sampleQuestions[h % fact.sampleQuestions.length];
 }
 
 export const MAX_STARTING_FACTS = 5;

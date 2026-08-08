@@ -53,7 +53,7 @@ contract ArenaTest is Test {
         uint256 seed = uint256(
             keccak256(abi.encodePacked(blockhash(block.number - 1), block.prevrandao, block.timestamp, idA, idB))
         );
-        uint8 factId = uint8(seed % 32);
+        uint8 factId = uint8(seed % 10);
 
         // idA has terrible stats but knows the one fact that'll be drawn; idB has great
         // stats but knows nothing — knowledge should still decide it.

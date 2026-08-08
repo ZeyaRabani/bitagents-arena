@@ -38,6 +38,7 @@ export function nameHashOf(name: string): `0x${string}` {
 const AGENTS_CACHE_TTL_MS = 4000;
 let agentsCache: { at: number; data: OnChainAgent[] } | null = null;
 let agentsInFlight: Promise<OnChainAgent[]> | null = null;
+let cacheEpoch = 0;
 
 async function withRpcRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
   try {
@@ -92,9 +93,15 @@ export async function fetchAgents(): Promise<OnChainAgent[]> {
   }
   if (agentsInFlight) return agentsInFlight;
 
+  const epochAtStart = cacheEpoch;
   agentsInFlight = fetchAgentsUncached()
     .then((data) => {
-      agentsCache = { at: Date.now(), data };
+      // If a write invalidated the cache while this request was in flight, don't let
+      // this now-stale response resurrect it — the caller still gets their data, but
+      // the shared cache stays cleared so the next call fetches fresh.
+      if (epochAtStart === cacheEpoch) {
+        agentsCache = { at: Date.now(), data };
+      }
       return data;
     })
     .finally(() => {
@@ -107,6 +114,7 @@ export async function fetchAgents(): Promise<OnChainAgent[]> {
 /** Bypass the cache immediately after a write so the caller sees its own effect. */
 export function invalidateAgentsCache() {
   agentsCache = null;
+  cacheEpoch++;
 }
 
 export async function isNameTaken(name: string): Promise<boolean> {

@@ -29,7 +29,7 @@ contract Arena {
     address public relayer;
     uint256 public nextId = 1;
 
-    uint256 public constant FACT_COUNT = 32;
+    uint256 public constant FACT_COUNT = 10;
     uint256 public constant TRAIN_COOLDOWN = 45 seconds;
     uint32 public constant STARTING_RATING = 1000;
     uint32 public constant MIN_RATING = 100;

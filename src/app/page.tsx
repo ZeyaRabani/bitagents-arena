@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { FACT_POOL, MAX_STARTING_FACTS, bitmaskToFacts } from "@/lib/factPool";
+import { FACT_POOL, MAX_STARTING_FACTS, bitmaskToFacts, pickSampleQuestion } from "@/lib/factPool";
 
 const TRAIN_COOLDOWN_MS = 45_000;
 const STORAGE_KEY = "bitagents:myAgent";
@@ -132,7 +132,7 @@ function AgentCombatCard({
   side: "left" | "right";
   outcome?: "winner" | "loser";
 }) {
-  const knownCount = agent ? bitmaskToFacts(agent.knowledge).length : 0;
+  const knownSubjects = agent ? bitmaskToFacts(agent.knowledge) : [];
   return (
     <div
       className={`flex-1 border p-4 text-center ${side === "left" ? "ba-slide-left" : "ba-slide-right"} ${
@@ -149,7 +149,7 @@ function AgentCombatCard({
           <p className="font-mono text-[10px] uppercase tracking-wide text-signal">{agent.ability}</p>
           <p className="text-xs text-muted-foreground italic mt-1 line-clamp-2">{agent.flavor}</p>
           <p className="font-mono text-[10px] text-muted-foreground mt-2">
-            trained on {knownCount}/5 thing{knownCount === 1 ? "" : "s"}
+            {knownSubjects.length > 0 ? `specializes in: ${knownSubjects.map((f) => f.q).join(", ")}` : "no specialty yet"}
           </p>
         </div>
       )}
@@ -189,8 +189,8 @@ function BattleModal({
   const oppKnewFact = !!(opponent && factBit && opponent.knowledge & factBit);
   const statsExplainer =
     meKnewFact && oppKnewFact
-      ? "Both agents had been taught this, so it came down to stats"
-      : "Neither agent had been taught this, so it came down to stats";
+      ? `Both agents had specialized in ${fact?.q}, so it came down to stats`
+      : `Neither agent had specialized in ${fact?.q}, so it came down to stats`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
@@ -270,14 +270,17 @@ function BattleModal({
             {fact && (
               <div className="mt-5 border border-border bg-surface px-4 py-3">
                 <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "🎲 Decided by stats"}
+                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "🎲 Decided by stats"} · {fact.q}
                 </p>
                 <p className="text-sm">
-                  The question was <span className="text-foreground font-semibold">&ldquo;{fact.q}&rdquo;</span>
+                  The question was{" "}
+                  <span className="text-foreground font-semibold">
+                    &ldquo;{pickSampleQuestion(fact, entry.txHash)}&rdquo;
+                  </span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {entry.decidedByKnowledge
-                    ? `${entry.winnerName} had been taught this — ${entry.loserName} hadn't. Knowledge beats stats every time.`
+                    ? `${entry.winnerName} had specialized in ${fact.q} — ${entry.loserName} hadn't. Knowledge beats stats every time.`
                     : `${statsExplainer} — higher attack & speed wins the roll. ${entry.winnerName} scored ${entry.winnerRoll} to ${entry.loserName}'s ${entry.loserRoll}.`}
                 </p>
               </div>
@@ -606,14 +609,14 @@ export default function Home() {
             </button>
             <h2 className="font-display text-xl font-bold mb-4">How to play</h2>
             <ol className="grid gap-3 text-sm text-foreground/90 list-decimal list-inside">
-              <li>Name your agent and teach it up to 5 facts.</li>
+              <li>Name your agent and pick 5 of 10 subjects to specialize in.</li>
               <li>Hit Play — you&apos;ll be matched against another agent.</li>
               <li>
-                A random question gets drawn. If only your agent was taught it, you win.
-                If neither (or both) knew it, stats decide instead.
+                A random subject gets drawn. If only your agent specialized in it, you win.
+                If neither (or both) did, stats decide instead.
               </li>
               <li>Winning and losing move your rating — climb the leaderboard.</li>
-              <li>Lose a match and you get one bonus training slot to catch up.</li>
+              <li>Lose a match and you get one bonus subject to catch up.</li>
             </ol>
             <button
               onClick={() => setShowRules(false)}
@@ -651,9 +654,9 @@ export default function Home() {
             />
             <div>
               <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                Teach it {chosenFacts.length}/{MAX_STARTING_FACTS} facts
+                Pick {chosenFacts.length}/{MAX_STARTING_FACTS} subjects to specialize in
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {FACT_POOL.map((f) => (
                   <button
                     type="button"
@@ -665,7 +668,8 @@ export default function Home() {
                         : "border-border bg-surface text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    {f.q}
+                    <span className="font-semibold">{f.q}</span>
+                    <span className="block text-muted-foreground">{f.a}</span>
                   </button>
                 ))}
               </div>
@@ -729,7 +733,7 @@ export default function Home() {
 
                 <div className="mt-6">
                   <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Known facts ({myKnown.length}/{me.knowledgeCap} cap)
+                    Specialties ({myKnown.length}/{me.knowledgeCap} cap)
                     {onComeback && <span className="text-signal"> · comeback slot active</span>}
                   </p>
                   <div className="flex flex-wrap gap-2 mb-3">
@@ -742,12 +746,12 @@ export default function Home() {
                   </div>
 
                   <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Train{" "}
+                    Learn a new subject{" "}
                     {atCap
                       ? "— at cap, win or lose a match to change it"
                       : cooldownRemaining > 0 && `— next in ${Math.ceil(cooldownRemaining / 1000)}s`}
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {myUnknown.map((f) => (
                       <button
                         key={f.id}
@@ -755,7 +759,8 @@ export default function Home() {
                         disabled={cooldownRemaining > 0 || atCap}
                         className="text-left text-xs px-3 py-2 border border-border bg-surface text-muted-foreground hover:text-foreground hover:border-signal disabled:opacity-40 disabled:cursor-not-allowed transition"
                       >
-                        {f.q}
+                        <span className="font-semibold">{f.q}</span>
+                        <span className="block text-muted-foreground">{f.a}</span>
                       </button>
                     ))}
                   </div>
