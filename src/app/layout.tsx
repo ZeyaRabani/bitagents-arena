@@ -18,8 +18,8 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "BitAgents Arena",
-  description: "Describe an AI agent. It fights on-chain on Monad, live.",
+  title: "BitHumans",
+  description: "Real-time wagered trivia about Monad and crypto — human vs human, on-chain.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

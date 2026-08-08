@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { fetchAgents } from "@/lib/arenaActions";
+import { fetchUsers } from "@/lib/bithumansActions";
 
 export async function GET() {
   try {
-    const agents = await fetchAgents();
-    return NextResponse.json({ agents });
+    const users = await fetchUsers();
+    return NextResponse.json({ users });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

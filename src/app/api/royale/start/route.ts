@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchAgents } from "@/lib/arenaActions";
+import { fetchUsers } from "@/lib/bithumansActions";
 import { startRoyale, royaleSnapshot } from "@/lib/gameState";
 
 export async function POST() {
@@ -7,9 +7,9 @@ export async function POST() {
     if (royaleSnapshot().status === "running") {
       return NextResponse.json({ error: "a royale is already running" }, { status: 409 });
     }
-    const agents = await fetchAgents();
-    await startRoyale(agents);
-    return NextResponse.json({ started: true, participantCount: agents.length });
+    const users = await fetchUsers();
+    await startRoyale(users);
+    return NextResponse.json({ started: true, participantCount: users.length });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

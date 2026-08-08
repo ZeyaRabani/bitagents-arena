@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, http, defineChain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arenaAbi } from "./arenaAbi";
+import { bithumansAbi } from "./bithumansAbi";
 
 export const monadTestnet = defineChain({
   id: Number(process.env.MONAD_TESTNET_CHAIN_ID ?? 10143),
@@ -34,10 +34,10 @@ export function getRelayerClient() {
   });
 }
 
-export function getArenaAddress(): `0x${string}` {
-  const addr = process.env.NEXT_PUBLIC_ARENA_CONTRACT_ADDRESS;
-  if (!addr) throw new Error("NEXT_PUBLIC_ARENA_CONTRACT_ADDRESS not set");
+export function getBitHumansAddress(): `0x${string}` {
+  const addr = process.env.NEXT_PUBLIC_BITHUMANS_CONTRACT_ADDRESS;
+  if (!addr) throw new Error("NEXT_PUBLIC_BITHUMANS_CONTRACT_ADDRESS not set");
   return addr as `0x${string}`;
 }
 
-export { arenaAbi };
+export { bithumansAbi };

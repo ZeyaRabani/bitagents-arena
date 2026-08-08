@@ -2,27 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { FACT_POOL, MAX_STARTING_FACTS, bitmaskToFacts, pickSampleQuestion } from "@/lib/factPool";
 
-const TRAIN_COOLDOWN_MS = 45_000;
-const STORAGE_KEY = "bitagents:myAgent";
+const STORAGE_KEY = "bithumans:myUser";
+const ANSWER_TIMEOUT_MS = 15_000;
 
-interface Agent {
+function money(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+interface UserRow {
   id: string;
   owner: string;
   name: string;
-  ability: string;
-  flavor: string;
-  attack: number;
-  defense: number;
-  speed: number;
+  balance: number;
   wins: number;
   losses: number;
-  rating: number;
-  knowledge: number;
-  knowledgeCap: number;
   createdAt: string;
-  lastTrainedAt: string;
+  lastDripAt: string;
 }
 
 interface FeedEntry {
@@ -30,20 +26,20 @@ interface FeedEntry {
   loserId: string;
   winnerName: string;
   loserName: string;
-  factId: number;
-  decidedByKnowledge: boolean;
+  questionId: number;
+  decidedByAnswer: boolean;
   winnerThrow: number;
   loserThrow: number;
-  ratingDelta: string;
-  winnerRatingAfter: number;
-  loserRatingAfter: number;
+  wager: number;
+  winnerBalanceAfter: number;
+  loserBalanceAfter: number;
   txHash: string;
   explorerUrl: string;
   at: number;
   mode: "queue" | "royale";
 }
 
-interface MyAgent {
+interface MyUser {
   id: string;
   name: string;
   nameHash: string;
@@ -51,21 +47,52 @@ interface MyAgent {
   explorerUrl: string;
 }
 
-interface Match {
+interface MatchOutcome {
+  winnerId: string;
+  loserId: string;
+  decidedByAnswer: boolean;
+  winnerThrow: number;
+  loserThrow: number;
+  wager?: number;
+  winnerBalanceAfter?: number;
+  loserBalanceAfter?: number;
+  explorerUrl?: string;
+  iWon: boolean | null;
+  correctIndex: number;
+}
+
+interface CurrentMatch {
+  id: string;
+  mode: "queue" | "royale";
+  opponentName: string;
+  question: { q: string; options: string[] };
+  myAnswer: number | null;
+  opponentAnswered: boolean;
+  resolved: boolean;
+  outcome: MatchOutcome | null;
+  createdAt: number;
+}
+
+interface RoyaleMatch {
   aId: string;
   bId: string | null;
   aName: string;
   bName: string | null;
-  result: FeedEntry | null;
+  matchId: string | null;
+  result: { winnerName: string; loserName: string; decidedByAnswer: boolean } | null;
 }
 
 interface RoyaleState {
   status: "idle" | "running" | "done";
-  rounds: Match[][];
+  rounds: RoyaleMatch[][];
   currentRound: number;
   championId: string | null;
   championName: string | null;
+  potAmount: number;
 }
+
+const THROW_NAMES = ["Rock", "Paper", "Scissors"];
+const THROW_EMOJI = ["🪨", "📄", "✂️"];
 
 function timeAgo(ts: number) {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -73,20 +100,7 @@ function timeAgo(ts: number) {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type BattlePhase = "idle" | "searching" | "found" | "starting" | "clash" | "result";
-
-const MIN_SEARCH_MS = 3000;
-
-const THROW_NAMES = ["Rock", "Paper", "Scissors"];
-const THROW_EMOJI = ["🪨", "📄", "✂️"];
-
-const PHASE_DURATIONS: Partial<Record<BattlePhase, number>> = {
-  found: 2800,
-  starting: 2400,
-  clash: 1800,
-};
-
-function RatingReveal({ from, to }: { from: number; to: number }) {
+function MoneyReveal({ from, to }: { from: number; to: number }) {
   const [display, setDisplay] = useState(from);
   useEffect(() => {
     const start = performance.now();
@@ -101,99 +115,32 @@ function RatingReveal({ from, to }: { from: number; to: number }) {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <span>{display}</span>;
+  return <span>{money(display)}</span>;
 }
 
-function StartingCountdown() {
-  const steps = ["3", "2", "1", "FIGHT!"];
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    if (i >= steps.length - 1) return;
-    const t = setTimeout(() => setI((v) => v + 1), 600);
-    return () => clearTimeout(t);
-  }, [i]);
-  return (
-    <p key={i} className="text-center font-display text-5xl font-black mt-6 text-signal ba-pop-in">
-      {steps[i]}
-    </p>
-  );
-}
+type ModalPhase = "idle" | "searching" | "question" | "waiting" | "result";
 
-interface CombatAgent {
-  name: string;
-  ability: string;
-  flavor: string;
-  knowledge: number;
-}
-
-function AgentCombatCard({
-  agent,
-  side,
-  outcome,
-}: {
-  agent: CombatAgent | null;
-  side: "left" | "right";
-  outcome?: "winner" | "loser";
-}) {
-  const knownSubjects = agent ? bitmaskToFacts(agent.knowledge) : [];
-  return (
-    <div
-      className={`flex-1 border p-4 text-center ${side === "left" ? "ba-slide-left" : "ba-slide-right"} ${
-        outcome === "winner"
-          ? "border-signal bg-signal/10"
-          : outcome === "loser"
-            ? "border-border bg-surface opacity-50"
-            : "border-border bg-surface"
-      }`}
-    >
-      <p className="font-display text-xl font-bold truncate">{agent?.name ?? "..."}</p>
-      {agent && (
-        <div className="mt-2">
-          <p className="font-mono text-[10px] uppercase tracking-wide text-signal">{agent.ability}</p>
-          <p className="text-xs text-muted-foreground italic mt-1 line-clamp-2">{agent.flavor}</p>
-          <p className="font-mono text-[10px] text-muted-foreground mt-2">
-            {knownSubjects.length > 0 ? `specializes in: ${knownSubjects.map((f) => f.q).join(", ")}` : "no specialty yet"}
-          </p>
-        </div>
-      )}
-      {outcome === "winner" && <p className="mt-3 font-mono text-xs uppercase text-signal">Winner</p>}
-    </div>
-  );
-}
-
-function BattleModal({
+function MatchModal({
   phase,
-  me,
-  opponent,
-  entry,
-  isMeWinner,
-  onContinue,
+  match,
+  myName,
+  now,
+  onAnswer,
   onCancelSearch,
   onClose,
 }: {
-  phase: BattlePhase;
-  me: CombatAgent | null;
-  opponent: CombatAgent | null;
-  entry: FeedEntry | null;
-  isMeWinner: boolean;
-  onContinue: () => void;
+  phase: ModalPhase;
+  match: CurrentMatch | null;
+  myName: string;
+  now: number;
+  onAnswer: (choice: number) => void;
   onCancelSearch: () => void;
   onClose: () => void;
 }) {
   if (phase === "idle") return null;
 
-  const fact = entry ? FACT_POOL[entry.factId] : null;
-  const myRatingAfter = entry ? (isMeWinner ? entry.winnerRatingAfter : entry.loserRatingAfter) : 0;
-  const delta = entry ? Number(entry.ratingDelta) : 0;
-  const myRatingBefore = isMeWinner ? myRatingAfter - delta : myRatingAfter + delta;
-
-  const factBit = entry ? 1 << entry.factId : 0;
-  const meKnewFact = !!(me && factBit && me.knowledge & factBit);
-  const oppKnewFact = !!(opponent && factBit && opponent.knowledge & factBit);
-  const tieExplainer =
-    meKnewFact && oppKnewFact
-      ? `Both agents had specialized in ${fact?.q}`
-      : `Neither agent had specialized in ${fact?.q}`;
+  const remainingMs = match ? Math.max(0, match.createdAt + ANSWER_TIMEOUT_MS - now) : 0;
+  const outcome = match?.outcome;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
@@ -210,107 +157,125 @@ function BattleModal({
         {phase === "searching" && (
           <div className="text-center ba-fade-in">
             <div className="mx-auto w-24 h-24 rounded-full border-4 border-signal/30 border-t-signal animate-spin mb-6" />
-            <p className="font-display text-2xl font-bold">{me?.name}</p>
+            <p className="font-display text-2xl font-bold">{myName}</p>
             <p className="font-mono text-sm text-muted-foreground mt-2 uppercase tracking-widest ba-flash">
               Searching for an opponent...
             </p>
-            <button
-              onClick={onCancelSearch}
-              className="mt-8 text-xs text-muted-foreground underline hover:text-foreground"
-            >
+            <button onClick={onCancelSearch} className="mt-8 text-xs text-muted-foreground underline hover:text-foreground">
               Cancel search
             </button>
           </div>
         )}
 
-        {(phase === "found" || phase === "starting" || phase === "clash") && (
-          <>
-            <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4 ba-fade-in">
-              {phase === "found" && "Opponent found"}
-              {phase === "starting" && "Get ready"}
-              {phase === "clash" && "Fighting on-chain..."}
+        {(phase === "question" || phase === "waiting") && match && (
+          <div className="ba-pop-in">
+            <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-2">
+              vs {match.opponentName} · wagering $0.05
             </p>
-            <div className={`flex items-center gap-3 ${phase === "clash" ? "ba-shake" : ""}`}>
-              <AgentCombatCard agent={me} side="left" />
-              <span className="font-display text-2xl font-black text-signal shrink-0">VS</span>
-              <AgentCombatCard agent={opponent} side="right" />
+            <p className="text-center font-mono text-xs text-signal mb-4">{Math.ceil(remainingMs / 1000)}s left</p>
+            <h2 className="font-display text-xl font-bold text-center mb-5">{match.question.q}</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {match.question.options.map((opt, i) => (
+                <button
+                  key={i}
+                  onClick={() => onAnswer(i)}
+                  disabled={match.myAnswer !== null}
+                  className={`text-left px-4 py-3 border transition text-sm ${
+                    match.myAnswer === i
+                      ? "border-signal bg-signal/10 text-foreground"
+                      : "border-border bg-surface text-muted-foreground hover:text-foreground hover:border-signal"
+                  } disabled:cursor-not-allowed`}
+                >
+                  {opt}
+                </button>
+              ))}
             </div>
-            {phase === "starting" && <StartingCountdown />}
-            {phase === "clash" && (
-              <p className="text-center font-mono text-sm mt-6 text-muted-foreground ba-flash">
-                resolving on Monad testnet...
+            {phase === "waiting" && (
+              <p className="text-center font-mono text-xs text-muted-foreground mt-6 ba-flash">
+                {match.opponentAnswered ? "resolving on Monad testnet..." : "waiting for your opponent..."}
               </p>
             )}
-          </>
+          </div>
         )}
 
-        {phase === "result" && entry && (
-          <div key={entry.txHash} className="ba-pop-in">
+        {phase === "result" && match && outcome && (
+          <div key={match.id} className="ba-pop-in">
             <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4">
-              Battle resolved
+              Match resolved
             </p>
-            <div className="flex items-center gap-3">
-              <AgentCombatCard agent={me} side="left" outcome={isMeWinner ? "winner" : "loser"} />
-              <span className="font-display text-2xl font-black text-muted-foreground shrink-0">VS</span>
-              <AgentCombatCard agent={opponent} side="right" outcome={isMeWinner ? "loser" : "winner"} />
+            <h2 className="font-display text-lg font-bold text-center mb-3">{match.question.q}</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+              {match.question.options.map((opt, i) => (
+                <div
+                  key={i}
+                  className={`px-4 py-3 border text-sm ${
+                    i === outcome.correctIndex
+                      ? "border-signal bg-signal/10 text-foreground"
+                      : "border-border bg-surface text-muted-foreground"
+                  }`}
+                >
+                  {opt} {i === outcome.correctIndex && <span className="text-signal">✓ correct</span>}
+                  {i === match.myAnswer && i !== outcome.correctIndex && <span className="text-destructive"> · your pick</span>}
+                </div>
+              ))}
             </div>
 
-            <div className="text-center mt-6">
-              <p className={`font-display text-3xl font-black ${isMeWinner ? "ba-pop-in" : ""}`}>
-                {isMeWinner ? "🏆 You won" : "Defeated"}
-              </p>
-              <p className="font-mono text-lg mt-1">
-                <span className={isMeWinner ? "text-signal" : "text-destructive"}>
-                  {isMeWinner ? "+" : "-"}
-                  {delta}
-                </span>{" "}
-                <span className="text-muted-foreground text-sm">
-                  (<RatingReveal from={myRatingBefore} to={myRatingAfter} /> rating)
-                </span>
-              </p>
-            </div>
-
-            {fact && (
-              <div className="mt-5 border border-border bg-surface px-4 py-3">
-                <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "✊ Decided by Rock Paper Scissors"} ·{" "}
-                  {fact.q}
-                </p>
-                <p className="text-sm">
-                  The question was{" "}
-                  <span className="text-foreground font-semibold">
-                    &ldquo;{pickSampleQuestion(fact, entry.txHash)}&rdquo;
+            <div className="text-center">
+              <p className="font-display text-3xl font-black">{outcome.iWon ? "🏆 You won" : "Defeated"}</p>
+              {outcome.wager !== undefined && (
+                <p className="font-mono text-lg mt-1">
+                  <span className={outcome.iWon ? "text-signal" : "text-destructive"}>
+                    {outcome.iWon ? "+" : "-"}
+                    {money(outcome.wager)}
+                  </span>{" "}
+                  <span className="text-muted-foreground text-sm">
+                    (
+                    <MoneyReveal
+                      from={
+                        outcome.iWon
+                          ? (outcome.winnerBalanceAfter ?? 0) - outcome.wager
+                          : (outcome.loserBalanceAfter ?? 0) + outcome.wager
+                      }
+                      to={outcome.iWon ? outcome.winnerBalanceAfter ?? 0 : outcome.loserBalanceAfter ?? 0}
+                    />
+                    )
                   </span>
                 </p>
+              )}
+            </div>
+
+            <div className="mt-5 border border-border bg-surface px-4 py-3">
+              <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                {outcome.decidedByAnswer ? "🧠 Decided by the answer" : "✊ Decided by Rock Paper Scissors"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {outcome.decidedByAnswer
+                  ? "One of you answered correctly and one didn't — the correct answer always wins outright."
+                  : outcome.winnerThrow === outcome.loserThrow
+                    ? `Both of you answered the same way, so it came down to Rock Paper Scissors — a genuine tie, broken by one more coinflip.`
+                    : `Both of you were equally right or wrong, so it came down to Rock Paper Scissors — no other factor decides it.`}
+              </p>
+              {!outcome.decidedByAnswer && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {entry.decidedByKnowledge
-                    ? `${entry.winnerName} had specialized in ${fact.q} — ${entry.loserName} hadn't. Knowledge always wins outright.`
-                    : entry.winnerThrow === entry.loserThrow
-                      ? `${tieExplainer}, so it came down to Rock Paper Scissors — no stat ever tips it. Both threw ${
-                          THROW_EMOJI[entry.winnerThrow]
-                        } ${THROW_NAMES[entry.winnerThrow]}, a genuine tie, so one more coinflip broke it in ${
-                          entry.winnerName
-                        }'s favor.`
-                      : `${tieExplainer}, so it came down to Rock Paper Scissors — no stat ever tips it. ${
-                          entry.winnerName
-                        } threw ${THROW_EMOJI[entry.winnerThrow]} ${THROW_NAMES[entry.winnerThrow]}, ${
-                          entry.loserName
-                        } threw ${THROW_EMOJI[entry.loserThrow]} ${THROW_NAMES[entry.loserThrow]}.`}
+                  {THROW_EMOJI[outcome.winnerThrow]} {THROW_NAMES[outcome.winnerThrow]} vs {THROW_EMOJI[outcome.loserThrow]}{" "}
+                  {THROW_NAMES[outcome.loserThrow]}
                 </p>
-              </div>
+              )}
+            </div>
+
+            {outcome.explorerUrl && (
+              <a
+                href={outcome.explorerUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-xs text-signal underline mt-3 inline-block"
+              >
+                view match tx
+              </a>
             )}
 
-            <a
-              href={entry.explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="font-mono text-xs text-signal underline mt-3 inline-block"
-            >
-              view battle tx
-            </a>
-
             <button
-              onClick={onContinue}
+              onClick={onClose}
               className="w-full mt-4 px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground hover:opacity-90 transition"
             >
               Continue
@@ -323,35 +288,29 @@ function BattleModal({
 }
 
 export default function Home() {
-  const [myAgent, setMyAgentState] = useState<MyAgent | null>(null);
+  const [myUser, setMyUserState] = useState<MyUser | null>(null);
   const [hydrated, setHydrated] = useState(false);
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [royale, setRoyale] = useState<RoyaleState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [battlePhase, setBattlePhase] = useState<BattlePhase>("idle");
-  const [battleEntry, setBattleEntry] = useState<FeedEntry | null>(null);
-  const [battleOpponent, setBattleOpponent] = useState<Agent | null>(null);
-  const [battleSelf, setBattleSelf] = useState<Agent | null>(null);
+  const [phase, setPhase] = useState<ModalPhase>("idle");
+  const [currentMatch, setCurrentMatch] = useState<CurrentMatch | null>(null);
   const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
   const [siteUrl, setSiteUrl] = useState("");
   const [showRules, setShowRules] = useState(false);
-  const lastHandledBattleAt = useRef<number>(0);
-  const searchStartedAt = useRef<number>(0);
   const toastedAtRef = useRef<number | null>(null);
+  const lastMatchIdRef = useRef<string | null>(null);
 
-  // create-form state
   const [name, setName] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [chosenFacts, setChosenFacts] = useState<number[]>([]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       try {
-        setMyAgentState(JSON.parse(raw));
+        setMyUserState(JSON.parse(raw));
       } catch {
         // ignore corrupt storage
       }
@@ -360,19 +319,19 @@ export default function Home() {
     setSiteUrl(window.location.origin);
   }, []);
 
-  function setMyAgent(agent: MyAgent | null) {
-    setMyAgentState(agent);
-    if (agent) localStorage.setItem(STORAGE_KEY, JSON.stringify(agent));
+  function setMyUser(user: MyUser | null) {
+    setMyUserState(user);
+    if (user) localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
     else localStorage.removeItem(STORAGE_KEY);
   }
 
-  const loadAgents = useCallback(async () => {
+  const loadUsers = useCallback(async () => {
     try {
-      const res = await fetch("/api/agents");
+      const res = await fetch("/api/users");
       const data = await res.json();
-      if (data.agents) setAgents(data.agents);
+      if (data.users) setUsers(data.users);
     } catch {
-      // ignore transient poll failures
+      // ignore
     }
   }, []);
 
@@ -397,52 +356,64 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    loadAgents();
+    loadUsers();
     loadFeed();
     loadRoyale();
-    const t1 = setInterval(loadAgents, 3000);
+    const t1 = setInterval(loadUsers, 3000);
     const t2 = setInterval(loadFeed, 2500);
     const t3 = setInterval(loadRoyale, 1500);
-    const t4 = setInterval(() => setNow(Date.now()), 1000);
+    const t4 = setInterval(() => setNow(Date.now()), 500);
     return () => {
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
       clearInterval(t4);
     };
-  }, [loadAgents, loadFeed, loadRoyale]);
+  }, [loadUsers, loadFeed, loadRoyale]);
 
-  // detect our queue match resolving and kick off the dramatic reveal sequence —
-  // enforces a minimum "searching" duration so it never feels like an instant
-  // auto-challenge, even if the matchmaker paired us within a second.
+  // Drives the whole match modal: poll for the player's current match and derive
+  // phase purely from what the server says, so it's correct regardless of timing.
   useEffect(() => {
-    if (battlePhase !== "searching" || !myAgent) return;
-    const mine = feed.find(
-      (f) => f.mode === "queue" && (f.winnerId === myAgent.id || f.loserId === myAgent.id) && f.at > lastHandledBattleAt.current
-    );
-    if (!mine) return;
+    if (phase === "idle" || !myUser) return;
+    let cancelled = false;
 
-    lastHandledBattleAt.current = mine.at;
-    const opponentId = mine.winnerId === myAgent.id ? mine.loserId : mine.winnerId;
-    const opponent = agents.find((a) => a.id === opponentId) ?? null;
-    const self = agents.find((a) => a.id === myAgent.id) ?? null;
+    async function poll() {
+      try {
+        const res = await fetch(`/api/match/mine?userId=${myUser!.id}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const m = data.match as CurrentMatch | null;
+        if (!m) return; // still searching, nothing to show yet
 
-    const elapsed = Date.now() - searchStartedAt.current;
-    const remaining = Math.max(0, MIN_SEARCH_MS - elapsed);
-    const t = setTimeout(() => {
-      setBattleOpponent(opponent);
-      setBattleSelf(self);
-      setBattleEntry(mine);
-      setBattlePhase("found");
-    }, remaining);
-    return () => clearTimeout(t);
-  }, [feed, battlePhase, myAgent, agents]);
+        setCurrentMatch(m);
+        if (m.resolved) {
+          setPhase("result");
+          if (lastMatchIdRef.current !== m.id) {
+            lastMatchIdRef.current = m.id;
+          }
+        } else if (m.myAnswer === null) {
+          setPhase("question");
+        } else {
+          setPhase("waiting");
+        }
+      } catch {
+        // ignore transient poll failures
+      }
+    }
 
-  // ambient toasts for any battle happening in the arena, not just ours
+    poll();
+    const t = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [phase, myUser]);
+
+  // ambient toasts for any match resolving in the arena, not just ours
   useEffect(() => {
     if (feed.length === 0) return;
     if (toastedAtRef.current === null) {
-      toastedAtRef.current = feed[0].at; // baseline on first load, don't backfill history
+      toastedAtRef.current = feed[0].at;
       return;
     }
     const newOnes = feed.filter((f) => f.at > toastedAtRef.current!).sort((a, b) => a.at - b.at);
@@ -451,7 +422,7 @@ export default function Home() {
 
     const additions = newOnes.map((f) => ({
       id: `${f.txHash}-${f.at}`,
-      text: `${f.winnerName} beat ${f.loserName}${f.decidedByKnowledge ? " — knew it!" : ""}`,
+      text: `${f.winnerName} beat ${f.loserName} for ${money(f.wager)}`,
     }));
     setToasts((prev) => [...prev, ...additions].slice(-4));
     additions.forEach((t) => {
@@ -459,52 +430,11 @@ export default function Home() {
     });
   }, [feed]);
 
-  function closeBattleModal() {
-    setBattlePhase("idle");
-    setBattleEntry(null);
-    setBattleOpponent(null);
-    setBattleSelf(null);
-  }
-
-  // auto-advance through the animated beats (found -> starting -> clash) — the player
-  // only has to click something once the result is up, or to bail out early via X.
-  useEffect(() => {
-    const duration = PHASE_DURATIONS[battlePhase];
-    if (!duration) return;
-    const next: Partial<Record<BattlePhase, BattlePhase>> = { found: "starting", starting: "clash", clash: "result" };
-    const t = setTimeout(() => setBattlePhase(next[battlePhase]!), duration);
-    return () => clearTimeout(t);
-  }, [battlePhase]);
-
-  async function handleCancelSearch() {
-    if (myAgent) {
-      fetch("/api/queue/leave", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: myAgent.id }),
-      }).catch(() => {});
-    }
-    setBattlePhase("idle");
-  }
-
-  const me = useMemo(() => agents.find((a) => a.id === myAgent?.id) ?? null, [agents, myAgent]);
-  const leaderboard = useMemo(() => [...agents].sort((a, b) => b.rating - a.rating).slice(0, 8), [agents]);
-  const myKnown = me ? bitmaskToFacts(me.knowledge) : [];
-  const myUnknown = me ? FACT_POOL.filter((f) => !myKnown.some((k) => k.id === f.id)) : [];
-  const cooldownRemaining = me ? TRAIN_COOLDOWN_MS - (now - Number(me.lastTrainedAt) * 1000) : 0;
-  const atCap = me ? myKnown.length >= me.knowledgeCap : false;
-  const onComeback = me ? me.knowledgeCap > 5 : false;
+  const me = useMemo(() => users.find((u) => u.id === myUser?.id) ?? null, [users, myUser]);
+  const leaderboard = useMemo(() => [...users].sort((a, b) => b.balance - a.balance).slice(0, 8), [users]);
 
   function short(hash: string) {
     return `${hash.slice(0, 10)}…${hash.slice(-6)}`;
-  }
-
-  function toggleFact(id: number) {
-    setChosenFacts((prev) => {
-      if (prev.includes(id)) return prev.filter((f) => f !== id);
-      if (prev.length >= MAX_STARTING_FACTS) return prev;
-      return [...prev, id];
-    });
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -513,21 +443,15 @@ export default function Home() {
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch("/api/agents/create", {
+      const res = await fetch("/api/users/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, prompt, factIds: chosenFacts }),
+        body: JSON.stringify({ name }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setMyAgent({
-        id: data.agentId,
-        name,
-        nameHash: data.nameHash,
-        txHash: data.txHash,
-        explorerUrl: data.explorerUrl,
-      });
-      await loadAgents();
+      setMyUser({ id: data.userId, name, nameHash: data.nameHash, txHash: data.txHash, explorerUrl: data.explorerUrl });
+      await loadUsers();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -535,40 +459,60 @@ export default function Home() {
     }
   }
 
-  async function handleTrain(factId: number) {
-    if (!myAgent) return;
+  async function handlePlay() {
+    if (!myUser) return;
     setError(null);
+    setPhase("searching");
     try {
-      const res = await fetch("/api/agents/train", {
+      const res = await fetch("/api/queue/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: myAgent.id, factId }),
+        body: JSON.stringify({ userId: myUser.id, name: myUser.name }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      await loadAgents();
+    } catch (err) {
+      setError((err as Error).message);
+      setPhase("idle");
+    }
+  }
+
+  async function handleCancelSearch() {
+    if (myUser) {
+      fetch("/api/queue/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: myUser.id }),
+      }).catch(() => {});
+    }
+    setPhase("idle");
+  }
+
+  async function handleAnswer(choice: number) {
+    if (!myUser || !currentMatch) return;
+    try {
+      await fetch("/api/match/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId: currentMatch.id, userId: myUser.id, choice }),
+      });
+      setCurrentMatch({ ...currentMatch, myAnswer: choice });
+      setPhase("waiting");
     } catch (err) {
       setError((err as Error).message);
     }
   }
 
-  async function handlePlay() {
-    if (!myAgent) return;
-    setError(null);
-    searchStartedAt.current = Date.now();
-    setBattlePhase("searching");
-    try {
-      const res = await fetch("/api/queue/join", {
+  function closeMatchModal() {
+    if (currentMatch?.resolved) {
+      fetch("/api/match/dismiss", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: myAgent.id, name: myAgent.name }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-    } catch (err) {
-      setError((err as Error).message);
-      setBattlePhase("idle");
+        body: JSON.stringify({ matchId: currentMatch.id }),
+      }).catch(() => {});
     }
+    setPhase("idle");
+    setCurrentMatch(null);
   }
 
   async function handleStartRoyale() {
@@ -589,13 +533,13 @@ export default function Home() {
     <div className="min-h-screen bg-background text-foreground p-6 md:p-10">
       <header className="max-w-5xl mx-auto text-center mb-8">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground mb-2">
-          Monad Testnet · {agents.length} agents live
+          Monad Testnet · {users.length} players · testnet play money only
         </p>
         <h1 className="font-display text-4xl md:text-6xl font-bold tracking-tight">
-          BITAGENTS <span className="text-signal">ARENA</span>
+          BIT<span className="text-signal">HUMANS</span>
         </h1>
         <p className="text-muted-foreground mt-3">
-          Teach your agent what a stock AI doesn&apos;t know. Battle for real, on-chain, in seconds.
+          Real stakes, real-time trivia about Monad and crypto — human vs human, winner takes the pot.
         </p>
         <button
           onClick={() => setShowRules(true)}
@@ -610,10 +554,7 @@ export default function Home() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in"
           onClick={() => setShowRules(false)}
         >
-          <div
-            className="w-full max-w-sm border border-border bg-card p-6 ba-pop-in relative"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="w-full max-w-sm border border-border bg-card p-6 ba-pop-in relative" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setShowRules(false)}
               aria-label="Close"
@@ -623,15 +564,12 @@ export default function Home() {
             </button>
             <h2 className="font-display text-xl font-bold mb-4">How to play</h2>
             <ol className="grid gap-3 text-sm text-foreground/90 list-decimal list-inside">
-              <li>Name your agent and pick 5 of 10 subjects to specialize in.</li>
-              <li>Hit Play — you&apos;ll be matched against another agent.</li>
-              <li>
-                A random subject gets drawn. If only your agent specialized in it, you win.
-                If neither (or both) did, it's settled with Rock Paper Scissors — no
-                stat ever decides a fight.
-              </li>
-              <li>Winning and losing move your rating — climb the leaderboard.</li>
-              <li>Lose a match and you get one bonus subject to catch up.</li>
+              <li>Name yourself. You get $0.30 in testnet play money to start.</li>
+              <li>Hit Play — you&apos;ll be matched against another real person.</li>
+              <li>Both of you get the same multiple-choice question about Monad or crypto. Pick fast — you&apos;ve got 15 seconds.</li>
+              <li>Whoever answers correctly wins the $0.05 wager. If you&apos;re both right or both wrong, Rock Paper Scissors decides.</li>
+              <li>Battle Royale: everyone puts in $0.05 up front, the sole survivor takes the entire pot.</li>
+              <li>Balance drips back slowly over time, so you&apos;re never fully out.</li>
             </ol>
             <button
               onClick={() => setShowRules(false)}
@@ -645,93 +583,57 @@ export default function Home() {
 
       <main className="max-w-5xl mx-auto grid gap-8">
         {error && (
-          <div className="border border-destructive/40 bg-destructive/10 px-4 py-2 text-destructive text-sm">
-            {error}
-          </div>
+          <div className="border border-destructive/40 bg-destructive/10 px-4 py-2 text-destructive text-sm">{error}</div>
         )}
 
-        {!myAgent ? (
+        {!myUser ? (
           <form onSubmit={handleCreate} className="grid gap-4 border border-border bg-card p-5">
-            <h2 className="font-display text-xl font-bold">Create your agent</h2>
+            <h2 className="font-display text-xl font-bold">Join in</h2>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Agent name — this is permanently yours"
+              placeholder="Your name — this is permanently yours"
               maxLength={32}
               className="border border-border bg-surface px-4 py-3 outline-none focus:border-signal placeholder:text-muted-foreground"
             />
-            <input
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe its personality (optional) — e.g. a caffeinated hedgehog"
-              maxLength={200}
-              className="border border-border bg-surface px-4 py-3 outline-none focus:border-signal placeholder:text-muted-foreground"
-            />
-            <div>
-              <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                Pick {chosenFacts.length}/{MAX_STARTING_FACTS} subjects to specialize in
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {FACT_POOL.map((f) => (
-                  <button
-                    type="button"
-                    key={f.id}
-                    onClick={() => toggleFact(f.id)}
-                    className={`text-left text-xs px-3 py-2 border transition ${
-                      chosenFacts.includes(f.id)
-                        ? "border-signal bg-signal/10 text-foreground"
-                        : "border-border bg-surface text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <span className="font-semibold">{f.q}</span>
-                    <span className="block text-muted-foreground">{f.a}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              You&apos;ll get $0.30 in testnet play money to start. This is not real money.
+            </p>
             <button
               type="submit"
               disabled={creating || !name.trim()}
               className="px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition"
             >
-              {creating ? "Creating on-chain..." : "Create Agent"}
+              {creating ? "Creating on-chain..." : "Join"}
             </button>
           </form>
         ) : (
           <section className="border border-border bg-card p-5">
             <div className="flex justify-between items-start flex-wrap gap-2">
               <div>
-                <h2 className="font-display text-2xl font-bold">{myAgent.name}</h2>
-                <p className="font-mono text-xs text-muted-foreground">#{myAgent.id}</p>
-                {myAgent.nameHash && (
-                  <p className="font-mono text-xs text-muted-foreground mt-1" title={myAgent.nameHash}>
-                    hash {short(myAgent.nameHash)}
+                <h2 className="font-display text-2xl font-bold">{myUser.name}</h2>
+                <p className="font-mono text-xs text-muted-foreground">#{myUser.id}</p>
+                {myUser.nameHash && (
+                  <p className="font-mono text-xs text-muted-foreground mt-1" title={myUser.nameHash}>
+                    hash {short(myUser.nameHash)}
                   </p>
                 )}
-                {myAgent.explorerUrl && (
-                  <a
-                    href={myAgent.explorerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-xs text-signal underline"
-                  >
+                {myUser.explorerUrl && (
+                  <a href={myUser.explorerUrl} target="_blank" rel="noreferrer" className="font-mono text-xs text-signal underline">
                     view creation tx
                   </a>
                 )}
               </div>
               <div className="text-right">
-                <p className="font-display text-3xl font-bold text-signal">{me?.rating ?? "..."}</p>
-                <p className="font-mono text-xs text-muted-foreground uppercase">rating</p>
+                <p className="font-display text-3xl font-bold text-signal">{me ? money(me.balance) : "..."}</p>
+                <p className="font-mono text-xs text-muted-foreground uppercase">balance</p>
               </div>
             </div>
 
             {me && (
               <>
-                <div className="flex gap-4 font-mono text-xs text-foreground/80 mt-3">
-                  <span>ATK {me.attack}</span>
-                  <span>DEF {me.defense}</span>
-                  <span>SPD {me.speed}</span>
-                  <span className="text-muted-foreground">
+                <div className="flex gap-4 font-mono text-xs text-muted-foreground mt-3">
+                  <span>
                     {me.wins}W - {me.losses}L
                   </span>
                 </div>
@@ -739,55 +641,17 @@ export default function Home() {
                 <div className="mt-5">
                   <button
                     onClick={handlePlay}
-                    disabled={battlePhase !== "idle"}
+                    disabled={phase !== "idle" || me.balance < 5}
                     className="w-full px-6 py-4 font-mono font-bold uppercase tracking-[0.1em] bg-signal text-primary-foreground disabled:opacity-60 hover:opacity-90 transition"
                   >
-                    {battlePhase === "searching" ? "Searching for opponent..." : "Play"}
+                    {phase === "searching" ? "Searching for opponent..." : me.balance < 5 ? "Not enough balance" : "Play — wager $0.05"}
                   </button>
-                </div>
-
-                <div className="mt-6">
-                  <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Specialties ({myKnown.length}/{me.knowledgeCap} cap)
-                    {onComeback && <span className="text-signal"> · comeback slot active</span>}
-                  </p>
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {myKnown.map((f) => (
-                      <span key={f.id} className="text-xs px-2 py-1 border border-signal/40 text-signal bg-signal/5">
-                        {f.q}
-                      </span>
-                    ))}
-                    {myKnown.length === 0 && <span className="text-xs text-muted-foreground">Nothing yet.</span>}
-                  </div>
-
-                  <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-2">
-                    Learn a new subject{" "}
-                    {atCap
-                      ? "— at cap, win or lose a match to change it"
-                      : cooldownRemaining > 0 && `— next in ${Math.ceil(cooldownRemaining / 1000)}s`}
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {myUnknown.map((f) => (
-                      <button
-                        key={f.id}
-                        onClick={() => handleTrain(f.id)}
-                        disabled={cooldownRemaining > 0 || atCap}
-                        className="text-left text-xs px-3 py-2 border border-border bg-surface text-muted-foreground hover:text-foreground hover:border-signal disabled:opacity-40 disabled:cursor-not-allowed transition"
-                      >
-                        <span className="font-semibold">{f.q}</span>
-                        <span className="block text-muted-foreground">{f.a}</span>
-                      </button>
-                    ))}
-                  </div>
                 </div>
               </>
             )}
 
-            <button
-              onClick={() => setMyAgent(null)}
-              className="mt-6 text-xs text-muted-foreground underline hover:text-foreground"
-            >
-              Create a different agent
+            <button onClick={() => setMyUser(null)} className="mt-6 text-xs text-muted-foreground underline hover:text-foreground">
+              Use a different name
             </button>
           </section>
         )}
@@ -795,21 +659,16 @@ export default function Home() {
         <section>
           <h2 className="font-display text-xl font-bold mb-3">Leaderboard</h2>
           <ol className="grid gap-px border border-border bg-border">
-            {leaderboard.map((a, i) => (
-              <li
-                key={a.id}
-                className={`flex justify-between px-4 py-2 text-sm ${
-                  a.id === myAgent?.id ? "bg-signal/10" : "bg-card"
-                }`}
-              >
+            {leaderboard.map((u, i) => (
+              <li key={u.id} className={`flex justify-between px-4 py-2 text-sm ${u.id === myUser?.id ? "bg-signal/10" : "bg-card"}`}>
                 <span>
                   <span className="font-mono text-muted-foreground mr-2">#{i + 1}</span>
-                  {a.name}
+                  {u.name}
                 </span>
-                <span className="font-mono text-signal">{a.rating}</span>
+                <span className="font-mono text-signal">{money(u.balance)}</span>
               </li>
             ))}
-            {leaderboard.length === 0 && <p className="text-muted-foreground text-sm bg-card px-4 py-2">No agents yet.</p>}
+            {leaderboard.length === 0 && <p className="text-muted-foreground text-sm bg-card px-4 py-2">No players yet.</p>}
           </ol>
         </section>
 
@@ -823,7 +682,7 @@ export default function Home() {
                   <span className="text-muted-foreground">beat</span> {f.loserName}
                   <span className="text-muted-foreground">
                     {" "}
-                    · {f.decidedByKnowledge ? "knew the answer" : "won rock paper scissors"} · +{f.ratingDelta}
+                    · {f.decidedByAnswer ? "knew it" : "won rock paper scissors"} · +{money(f.wager)}
                   </span>{" "}
                   {f.explorerUrl && (
                     <a href={f.explorerUrl} target="_blank" rel="noreferrer" className="text-signal underline">
@@ -834,7 +693,7 @@ export default function Home() {
                 <span className="text-muted-foreground shrink-0">{timeAgo(f.at)}</span>
               </li>
             ))}
-            {feed.length === 0 && <p className="text-muted-foreground text-sm bg-card px-4 py-2">No battles yet.</p>}
+            {feed.length === 0 && <p className="text-muted-foreground text-sm bg-card px-4 py-2">No matches yet.</p>}
           </ol>
         </section>
 
@@ -846,62 +705,59 @@ export default function Home() {
               disabled={royale?.status === "running"}
               className="px-4 py-2 font-mono text-xs uppercase tracking-wide bg-signal text-primary-foreground disabled:opacity-40 hover:opacity-90 transition"
             >
-              {royale?.status === "running" ? "Running..." : "Start Royale"}
+              {royale?.status === "running" ? "Running..." : "Start Royale — $0.05 entry"}
             </button>
           </div>
 
           {royale && royale.rounds.length > 0 ? (
-            <div className="flex gap-4 overflow-x-auto pb-2">
-              {royale.rounds.map((round, ri) => (
-                <div key={ri} className="min-w-[200px]">
-                  <p className="font-mono text-xs uppercase text-muted-foreground mb-2">Round {ri + 1}</p>
-                  <div className="grid gap-2">
-                    {round.map((m, mi) => (
-                      <div key={mi} className="border border-border bg-surface px-3 py-2 text-xs">
-                        <div className={m.result?.winnerName === m.aName ? "text-signal font-semibold" : ""}>
-                          {m.aName}
+            <>
+              <p className="font-mono text-xs text-muted-foreground mb-3">Pot: {money(royale.potAmount)}</p>
+              <div className="flex gap-4 overflow-x-auto pb-2">
+                {royale.rounds.map((round, ri) => (
+                  <div key={ri} className="min-w-[200px]">
+                    <p className="font-mono text-xs uppercase text-muted-foreground mb-2">Round {ri + 1}</p>
+                    <div className="grid gap-2">
+                      {round.map((m, mi) => (
+                        <div key={mi} className="border border-border bg-surface px-3 py-2 text-xs">
+                          <div className={m.result?.winnerName === m.aName ? "text-signal font-semibold" : ""}>{m.aName}</div>
+                          <div className="text-muted-foreground">vs</div>
+                          <div className={m.bName && m.result?.winnerName === m.bName ? "text-signal font-semibold" : ""}>
+                            {m.bName ?? "bye"}
+                          </div>
                         </div>
-                        <div className="text-muted-foreground">vs</div>
-                        <div className={m.bName && m.result?.winnerName === m.bName ? "text-signal font-semibold" : ""}>
-                          {m.bName ?? "bye"}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </>
           ) : (
             <p className="text-muted-foreground text-sm">
-              Everyone with an agent gets bracketed and battles through in seconds. Hit start when the room&apos;s
-              ready.
+              Everyone currently registered gets bracketed. The last player standing takes the whole pot.
             </p>
           )}
 
           {royale?.status === "done" && royale.championName && (
             <div className="mt-4 border border-signal/40 bg-signal/10 px-4 py-3 font-display text-lg font-bold text-signal">
-              🏆 {royale.championName} wins the arena
+              🏆 {royale.championName} wins {money(royale.potAmount)}
             </div>
           )}
         </section>
       </main>
 
-      <BattleModal
-        phase={battlePhase}
-        me={battlePhase === "searching" ? me : battleSelf}
-        opponent={battleOpponent}
-        entry={battleEntry}
-        isMeWinner={battleEntry?.winnerId === myAgent?.id}
-        onContinue={closeBattleModal}
+      <MatchModal
+        phase={phase}
+        match={currentMatch}
+        myName={myUser?.name ?? ""}
+        now={now}
+        onAnswer={handleAnswer}
         onCancelSearch={handleCancelSearch}
-        onClose={closeBattleModal}
+        onClose={closeMatchModal}
       />
 
       {siteUrl && (
         <div className="hidden lg:flex fixed top-24 right-6 z-30 flex-col items-center gap-3 border border-border bg-card p-4 w-48 ba-fade-in">
-          <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground text-center">
-            Scan to join the arena
-          </p>
+          <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground text-center">Scan to join</p>
           <div className="bg-white p-2">
             <QRCodeSVG value={siteUrl} size={140} bgColor="#ffffff" fgColor="#0c0a09" />
           </div>
@@ -911,10 +767,7 @@ export default function Home() {
 
       <div className="fixed top-4 right-4 z-40 flex flex-col gap-2 max-w-xs">
         {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="ba-slide-right bg-card border border-border px-4 py-2 text-xs shadow-lg"
-          >
+          <div key={t.id} className="ba-slide-right bg-card border border-border px-4 py-2 text-xs shadow-lg">
             {t.text}
           </div>
         ))}
