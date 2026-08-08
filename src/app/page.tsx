@@ -73,6 +73,7 @@ interface CurrentMatch {
   mode: "queue" | "royale";
   opponentName: string;
   question: { q: string; options: string[] };
+  round: number;
   myAnswer: number | null;
   opponentAnswered: boolean;
   resolved: boolean;
@@ -176,6 +177,11 @@ function MatchModal({
             <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-2">
               vs {match.opponentName} · wagering $0.05
             </p>
+            {match.round > 1 && (
+              <p className="text-center font-mono text-xs text-signal mb-1 ba-flash">
+                both wrong — tiebreak question {match.round}
+              </p>
+            )}
             <p className="text-center font-mono text-xs text-signal mb-4">{Math.ceil(remainingMs / 1000)}s left</p>
             <h2 className="font-display text-xl font-bold text-center mb-5">{match.question.q}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

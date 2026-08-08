@@ -24,6 +24,7 @@ export async function GET(req: Request) {
       mode: m.mode,
       opponentName,
       question: { q: m.question.q, options: m.question.options },
+      round: m.round,
       myAnswer,
       opponentAnswered,
       resolved: m.resolved,

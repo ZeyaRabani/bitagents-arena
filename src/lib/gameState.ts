@@ -12,6 +12,7 @@ import { pickRandomQuestion, type Question } from "./questionPool";
 const NO_ANSWER = 255;
 const ANSWER_TIMEOUT_MS = 15_000;
 const NEVER_ANSWERED_MS = 0xffffffff; // uint32 max — can never win a speed tiebreak
+const MAX_REASK_ROUNDS = 3; // both-wrong re-asks a fresh question, up to this many times
 
 export interface PendingMatch {
   id: string;
@@ -28,6 +29,9 @@ export interface PendingMatch {
   answeredAtA: number | null;
   answeredAtB: number | null;
   createdAt: number;
+  /** Bumped each time both players answer wrong and get a fresh question instead of a
+   *  speed tiebreak. Capped by MAX_REASK_ROUNDS so a match always eventually settles. */
+  round: number;
   /** True once resolution (success or failure) has fully finished — only at that point
    *  is `outcome` guaranteed to be populated (if it's going to be). Distinct from the
    *  in-flight `resolving` flag so waitForMatch() never observes a false-done state
@@ -117,6 +121,7 @@ function createPendingMatch(idA: string, nameA: string, idB: string, nameB: stri
     answeredAtA: null,
     answeredAtB: null,
     createdAt: Date.now(),
+    round: 1,
     resolved: false,
     resolving: false,
   };
@@ -154,6 +159,26 @@ export function dismissMatch(matchId: string) {
 
 async function resolveMatch(m: PendingMatch) {
   if (m.resolved || m.resolving) return;
+
+  // Both sides genuinely answered (not timeout-substituted) and both were wrong: ask a
+  // fresh question instead of falling back to a speed tiebreak. Capped by
+  // MAX_REASK_ROUNDS so an unlucky pair can't stall a match forever.
+  const bothReallyAnswered = m.answerA !== null && m.answerB !== null;
+  if (bothReallyAnswered) {
+    const aCorrect = m.answerA === m.question.correctIndex;
+    const bCorrect = m.answerB === m.question.correctIndex;
+    if (!aCorrect && !bCorrect && m.round < MAX_REASK_ROUNDS) {
+      m.question = pickRandomQuestion();
+      m.answerA = null;
+      m.answerB = null;
+      m.answeredAtA = null;
+      m.answeredAtB = null;
+      m.createdAt = Date.now();
+      m.round += 1;
+      return;
+    }
+  }
+
   m.resolving = true; // synchronous guard against a duplicate concurrent trigger
   const answerA = m.answerA ?? NO_ANSWER;
   const answerB = m.answerB ?? NO_ANSWER;
