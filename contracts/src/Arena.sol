@@ -2,10 +2,11 @@
 pragma solidity ^0.8.24;
 
 /// @title Arena - BitAgents on-chain battler
-/// @notice Players spawn AI-flavored agents, teach them facts from a shared pool, and
-///         pit them against each other. Whoever taught the drawn fact wins the round;
-///         if it's a knowledge tie, stats settle it. Every result updates a real Elo
-///         rating, fully on-chain and independently verifiable.
+/// @notice Players spawn AI-flavored agents, teach them subjects from a shared pool, and
+///         pit them against each other. Whoever specialized in the drawn subject wins
+///         the round; if it's a knowledge tie, rock-paper-scissors settles it — never a
+///         stat, so identical agents genuinely have even odds. Every result updates a
+///         real Elo rating, fully on-chain and independently verifiable.
 contract Arena {
     struct Agent {
         uint256 id;
@@ -60,8 +61,8 @@ contract Arena {
         uint256 indexed loserId,
         uint8 factId,
         bool decidedByKnowledge,
-        uint256 winnerRoll,
-        uint256 loserRoll,
+        uint8 winnerThrow,
+        uint8 loserThrow,
         uint256 ratingDelta,
         uint32 winnerRatingAfter,
         uint32 loserRatingAfter,
@@ -148,8 +149,10 @@ contract Arena {
     }
 
     /// @notice Resolve a battle. A fact is drawn pseudo-randomly; whichever agent was
-    ///         taught it wins outright. If both or neither know it, attack/speed stats
-    ///         (with a random roll) decide instead. Elo ratings update either way.
+    ///         taught it wins outright. If both or neither know it, it's decided by
+    ///         rock-paper-scissors instead — no stat ever tips a fight, so two agents
+    ///         with identical everything genuinely have even odds. Elo ratings update
+    ///         either way.
     function battle(uint256 idA, uint256 idB) external returns (uint256 winnerId, uint256 loserId) {
         require(idA != idB, "Arena: same agent");
         Agent storage a = agents[idA];
@@ -166,30 +169,28 @@ contract Arena {
         bool aKnows = (a.knowledge >> factId) & 1 == 1;
         bool bKnows = (b.knowledge >> factId) & 1 == 1;
 
-        uint256 rollA = (seed % 50) + uint256(a.attack) * 3 + a.speed;
-        uint256 rollB = ((seed >> 128) % 50) + uint256(b.attack) * 3 + b.speed;
-        rollA = rollA > b.defense ? rollA - b.defense / 2 : rollA;
-        rollB = rollB > a.defense ? rollB - a.defense / 2 : rollB;
+        // 0 = rock, 1 = paper, 2 = scissors.
+        uint8 throwA = uint8(seed % 3);
+        uint8 throwB = uint8((seed >> 64) % 3);
 
         bool decidedByKnowledge = aKnows != bKnows;
-        uint256 winnerRoll;
-        uint256 loserRoll;
+        uint8 winnerThrow;
+        uint8 loserThrow;
 
         if (decidedByKnowledge) {
             winnerId = aKnows ? idA : idB;
             loserId = aKnows ? idB : idA;
-            winnerRoll = aKnows ? rollA : rollB;
-            loserRoll = aKnows ? rollB : rollA;
-        } else if (rollA >= rollB) {
-            winnerId = idA;
-            loserId = idB;
-            winnerRoll = rollA;
-            loserRoll = rollB;
+            winnerThrow = aKnows ? throwA : throwB;
+            loserThrow = aKnows ? throwB : throwA;
         } else {
-            winnerId = idB;
-            loserId = idA;
-            winnerRoll = rollB;
-            loserRoll = rollA;
+            // (throwA - throwB + 3) % 3 == 1 means A's throw beats B's; == 2 means B
+            // beats A; == 0 is a genuine tie, broken by one more coinflip off the seed.
+            uint256 beats = (uint256(throwA) + 3 - uint256(throwB)) % 3;
+            bool aWins = beats == 1 || (beats == 0 && (seed >> 128) % 2 == 0);
+            winnerId = aWins ? idA : idB;
+            loserId = aWins ? idB : idA;
+            winnerThrow = aWins ? throwA : throwB;
+            loserThrow = aWins ? throwB : throwA;
         }
 
         Agent storage winner = agents[winnerId];
@@ -226,8 +227,8 @@ contract Arena {
             loserId,
             factId,
             decidedByKnowledge,
-            winnerRoll,
-            loserRoll,
+            winnerThrow,
+            loserThrow,
             ratingDelta,
             winner.rating,
             loser.rating,

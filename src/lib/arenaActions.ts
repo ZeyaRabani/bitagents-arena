@@ -200,8 +200,8 @@ export interface BattleOutcome {
   loserId: string;
   factId: number;
   decidedByKnowledge: boolean;
-  winnerRoll: string;
-  loserRoll: string;
+  winnerThrow: number;
+  loserThrow: number;
   ratingDelta: string;
   winnerRatingAfter: number;
   loserRatingAfter: number;
@@ -229,8 +229,8 @@ export async function battleOnChain(idA: string, idB: string): Promise<BattleOut
         loserId: decoded.args.loserId.toString(),
         factId: decoded.args.factId,
         decidedByKnowledge: decoded.args.decidedByKnowledge,
-        winnerRoll: decoded.args.winnerRoll.toString(),
-        loserRoll: decoded.args.loserRoll.toString(),
+        winnerThrow: decoded.args.winnerThrow,
+        loserThrow: decoded.args.loserThrow,
         ratingDelta: decoded.args.ratingDelta.toString(),
         winnerRatingAfter: decoded.args.winnerRatingAfter,
         loserRatingAfter: decoded.args.loserRatingAfter,

@@ -32,8 +32,8 @@ interface FeedEntry {
   loserName: string;
   factId: number;
   decidedByKnowledge: boolean;
-  winnerRoll: string;
-  loserRoll: string;
+  winnerThrow: number;
+  loserThrow: number;
   ratingDelta: string;
   winnerRatingAfter: number;
   loserRatingAfter: number;
@@ -76,6 +76,9 @@ function timeAgo(ts: number) {
 type BattlePhase = "idle" | "searching" | "found" | "starting" | "clash" | "result";
 
 const MIN_SEARCH_MS = 3000;
+
+const THROW_NAMES = ["Rock", "Paper", "Scissors"];
+const THROW_EMOJI = ["🪨", "📄", "✂️"];
 
 const PHASE_DURATIONS: Partial<Record<BattlePhase, number>> = {
   found: 2800,
@@ -187,10 +190,10 @@ function BattleModal({
   const factBit = entry ? 1 << entry.factId : 0;
   const meKnewFact = !!(me && factBit && me.knowledge & factBit);
   const oppKnewFact = !!(opponent && factBit && opponent.knowledge & factBit);
-  const statsExplainer =
+  const tieExplainer =
     meKnewFact && oppKnewFact
-      ? `Both agents had specialized in ${fact?.q}, so it came down to stats`
-      : `Neither agent had specialized in ${fact?.q}, so it came down to stats`;
+      ? `Both agents had specialized in ${fact?.q}`
+      : `Neither agent had specialized in ${fact?.q}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
@@ -270,7 +273,8 @@ function BattleModal({
             {fact && (
               <div className="mt-5 border border-border bg-surface px-4 py-3">
                 <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "🎲 Decided by stats"} · {fact.q}
+                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "✊ Decided by Rock Paper Scissors"} ·{" "}
+                  {fact.q}
                 </p>
                 <p className="text-sm">
                   The question was{" "}
@@ -280,8 +284,18 @@ function BattleModal({
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {entry.decidedByKnowledge
-                    ? `${entry.winnerName} had specialized in ${fact.q} — ${entry.loserName} hadn't. Knowledge beats stats every time.`
-                    : `${statsExplainer} — higher attack & speed wins the roll. ${entry.winnerName} scored ${entry.winnerRoll} to ${entry.loserName}'s ${entry.loserRoll}.`}
+                    ? `${entry.winnerName} had specialized in ${fact.q} — ${entry.loserName} hadn't. Knowledge always wins outright.`
+                    : entry.winnerThrow === entry.loserThrow
+                      ? `${tieExplainer}, so it came down to Rock Paper Scissors — no stat ever tips it. Both threw ${
+                          THROW_EMOJI[entry.winnerThrow]
+                        } ${THROW_NAMES[entry.winnerThrow]}, a genuine tie, so one more coinflip broke it in ${
+                          entry.winnerName
+                        }'s favor.`
+                      : `${tieExplainer}, so it came down to Rock Paper Scissors — no stat ever tips it. ${
+                          entry.winnerName
+                        } threw ${THROW_EMOJI[entry.winnerThrow]} ${THROW_NAMES[entry.winnerThrow]}, ${
+                          entry.loserName
+                        } threw ${THROW_EMOJI[entry.loserThrow]} ${THROW_NAMES[entry.loserThrow]}.`}
                 </p>
               </div>
             )}
@@ -613,7 +627,8 @@ export default function Home() {
               <li>Hit Play — you&apos;ll be matched against another agent.</li>
               <li>
                 A random subject gets drawn. If only your agent specialized in it, you win.
-                If neither (or both) did, stats decide instead.
+                If neither (or both) did, it's settled with Rock Paper Scissors — no
+                stat ever decides a fight.
               </li>
               <li>Winning and losing move your rating — climb the leaderboard.</li>
               <li>Lose a match and you get one bonus subject to catch up.</li>
@@ -808,7 +823,7 @@ export default function Home() {
                   <span className="text-muted-foreground">beat</span> {f.loserName}
                   <span className="text-muted-foreground">
                     {" "}
-                    · {f.decidedByKnowledge ? "knew the answer" : "won on stats"} · +{f.ratingDelta}
+                    · {f.decidedByKnowledge ? "knew the answer" : "won rock paper scissors"} · +{f.ratingDelta}
                   </span>{" "}
                   {f.explorerUrl && (
                     <a href={f.explorerUrl} target="_blank" rel="noreferrer" className="text-signal underline">

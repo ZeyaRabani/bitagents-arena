@@ -90,6 +90,31 @@ contract ArenaTest is Test {
         assertEq(winnerDelta, loserDelta, "equal-rated players should trade equal rating");
     }
 
+    function test_StatsNeverDecideAKnowledgeTie() public {
+        // Wildly different stats, both agents know nothing — a weak-stat agent should
+        // still be able to win, proving attack/defense/speed no longer influence the
+        // outcome at all (only knowledge, then a fair coin via rock-paper-scissors).
+        vm.prank(relayer);
+        uint256 weak = arena.createAgent(address(this), "Weak", "A", "F", 1, 1, 1, 0);
+        vm.prank(relayer);
+        uint256 strong = arena.createAgent(address(this), "Strong", "A", "F", 99, 99, 99, 0);
+
+        bool weakWonAtLeastOnce = false;
+        for (uint256 i = 0; i < 25; i++) {
+            vm.roll(block.number + 1);
+            (bool ok, bytes memory ret) = address(arena).call(
+                abi.encodeWithSignature("battle(uint256,uint256)", weak, strong)
+            );
+            require(ok, "battle reverted");
+            (uint256 winnerId, ) = abi.decode(ret, (uint256, uint256));
+            if (winnerId == weak) {
+                weakWonAtLeastOnce = true;
+                break;
+            }
+        }
+        assertTrue(weakWonAtLeastOnce, "the far weaker-stat agent should win at least once in 25 tries");
+    }
+
     function test_CannotRetrainKnownFact() public {
         uint256 id = _create("Zex", 1); // already knows fact 0
         vm.warp(block.timestamp + 46);
@@ -104,46 +129,76 @@ contract ArenaTest is Test {
         arena.createAgent(address(this), "Greedy", "A", "F", 30, 30, 30, uint32((1 << 6) - 1)); // 6 facts
     }
 
-    function _trainN(uint256 id, uint8 count) internal {
-        uint256 t0 = block.timestamp;
-        for (uint8 i = 0; i < count; i++) {
-            vm.warp(t0 + uint256(i + 1) * 46);
-            vm.prank(relayer);
-            arena.train(id, i);
-        }
-    }
-
     function test_LossGrantsComebackSlot_WinResetsParity() public {
-        vm.prank(relayer);
-        uint256 idA = arena.createAgent(address(this), "Dominant", "A", "F", 99, 99, 99, 0);
-        vm.prank(relayer);
-        uint256 idB = arena.createAgent(address(this), "Middling", "A", "F", 50, 50, 50, 0);
-        vm.prank(relayer);
-        uint256 idC = arena.createAgent(address(this), "Weakest", "A", "F", 1, 1, 1, 0);
+        uint256 idA = _create("Dominant", 0);
+        uint256 idB = _create("Middling", 0);
+        uint256 idC = _create("Weakest", 0);
 
-        // Battle 1: A crushes B on stats (both know nothing, so it's never knowledge-decided).
+        // Battle 1: force A to beat B via knowledge (stats no longer decide anything, so
+        // predict the fact this exact block state will draw and teach it to A only).
         vm.roll(block.number + 1);
+        uint256 t0 = block.timestamp + 46;
+        vm.warp(t0);
+        uint8 fact1 = uint8(
+            uint256(keccak256(abi.encodePacked(blockhash(block.number - 1), block.prevrandao, t0, idA, idB))) % 10
+        );
+        vm.prank(relayer);
+        arena.train(idA, fact1);
+
         (uint256 winner1, ) = arena.battle(idA, idB);
         assertEq(winner1, idA);
 
         Arena.Agent memory bAfterLoss = arena.getAgent(idB);
         assertEq(bAfterLoss.knowledgeCap, 6, "a loss should grant the 6th comeback slot");
 
-        // Fill B up to its new cap of 6.
-        _trainN(idB, 6);
-        Arena.Agent memory bTrained = arena.getAgent(idB);
-        assertEq(bTrained.knowledge, uint32((1 << 6) - 1));
+        // Fill B up to its new cap of 6, guaranteeing the 6th (last-trained) fact is
+        // whichever one battle(idB, idC) will draw at the final timestamp below — so B's
+        // win is knowledge-decided regardless of C (who knows nothing either way).
+        vm.roll(block.number + 1);
+        uint256 tBeforeFiller = block.timestamp;
+        uint256 tFinal = tBeforeFiller + 6 * 46;
+        uint8 fact2 = uint8(
+            uint256(keccak256(abi.encodePacked(blockhash(block.number - 1), block.prevrandao, tFinal, idB, idC))) % 10
+        );
 
-        // Battle 2: B beats C on stats (C never knows anything, so this is deterministic
-        // regardless of which fact gets drawn).
-        vm.roll(block.number + 2);
+        uint8[5] memory filler;
+        uint8 next = 0;
+        for (uint8 i = 0; i < 5; i++) {
+            while (next == fact2) next++;
+            filler[i] = next;
+            next++;
+        }
+        // Precompute every warp target up front — via_ir has previously miscompiled
+        // `vm.warp(someVar + expr)` reads inside a loop as if re-reading a live
+        // block.timestamp each iteration instead of the captured value, causing
+        // compounding (quadratic) timestamps and spurious cooldown reverts.
+        uint256[5] memory fillerTimestamps = [
+            tBeforeFiller + 46,
+            tBeforeFiller + 92,
+            tBeforeFiller + 138,
+            tBeforeFiller + 184,
+            tBeforeFiller + 230
+        ];
+        for (uint8 i = 0; i < 5; i++) {
+            vm.warp(fillerTimestamps[i]);
+            vm.prank(relayer);
+            arena.train(idB, filler[i]);
+        }
+        vm.warp(tFinal);
+        vm.prank(relayer);
+        arena.train(idB, fact2);
+
+        Arena.Agent memory bTrained = arena.getAgent(idB);
+        assertEq(_popcount(bTrained.knowledge), 6);
+        assertEq(bTrained.lastFactTaught, fact2);
+
         (uint256 winner2, ) = arena.battle(idB, idC);
-        assertEq(winner2, idB);
+        assertEq(winner2, idB, "B should win via knowledge of the drawn fact");
 
         Arena.Agent memory bAfterWin = arena.getAgent(idB);
         assertEq(bAfterWin.knowledgeCap, 5, "a win off the comeback slot should reset the cap to 5");
         assertEq(_popcount(bAfterWin.knowledge), 5, "the bonus fact should be forgotten");
-        assertEq(bAfterWin.knowledge & (1 << 5), 0, "specifically the 6th trained fact should be cleared");
+        assertEq(bAfterWin.knowledge & (uint32(1) << fact2), 0, "specifically the 6th trained fact should be cleared");
     }
 
     function _popcount(uint32 x) internal pure returns (uint8 count) {
