@@ -5,7 +5,6 @@ import {
   startRoyaleEntriesOnChain,
   payRoyaleChampionOnChain,
   type MatchOutcome,
-  type OnChainUser,
 } from "./bithumansActions";
 import { pickRandomQuestion, type Question } from "./questionPool";
 
@@ -13,6 +12,8 @@ const NO_ANSWER = 255;
 const ANSWER_TIMEOUT_MS = 15_000;
 const NEVER_ANSWERED_MS = 0xffffffff; // uint32 max — can never win a speed tiebreak
 const MAX_REASK_ROUNDS = 3; // both-wrong re-asks a fresh question, up to this many times
+const MIN_ROYALE_PLAYERS = 4;
+const ROYALE_COUNTDOWN_MS = 30_000;
 
 export interface PendingMatch {
   id: string;
@@ -71,7 +72,11 @@ interface RoyaleMatch {
 }
 
 interface RoyaleState {
-  status: "idle" | "running" | "done";
+  /** lobby: forming, waiting for MIN_ROYALE_PLAYERS. countdown: enough players joined,
+   *  30s left for stragglers. running/done: as before. */
+  status: "idle" | "lobby" | "countdown" | "running" | "done";
+  participants: { userId: string; name: string }[];
+  countdownEndsAt: number | null;
   rounds: RoyaleMatch[][];
   currentRound: number;
   championId: string | null;
@@ -95,7 +100,17 @@ function initState(): GameState {
     queue: [],
     pendingMatches: new Map(),
     feed: [],
-    royale: { status: "idle", rounds: [], currentRound: 0, championId: null, championName: null, potAmount: 0, startedAt: null },
+    royale: {
+      status: "idle",
+      participants: [],
+      countdownEndsAt: null,
+      rounds: [],
+      currentRound: 0,
+      championId: null,
+      championName: null,
+      potAmount: 0,
+      startedAt: null,
+    },
     matchmakerStarted: false,
   };
 }
@@ -301,6 +316,14 @@ export function startMatchmaker() {
       const b = state.queue.shift()!;
       createPendingMatch(a.userId, a.name, b.userId, b.name, "queue");
     }
+
+    if (
+      state.royale.status === "countdown" &&
+      state.royale.countdownEndsAt !== null &&
+      now >= state.royale.countdownEndsAt
+    ) {
+      void launchRoyaleFromLobby();
+    }
   }, 2000);
 }
 
@@ -328,32 +351,73 @@ export function royaleSnapshot() {
   return state.royale;
 }
 
-export async function startRoyale(users: OnChainUser[]) {
-  if (users.length < 2) throw new Error("need at least 2 players for a royale");
-  if (state.royale.status === "running") throw new Error("a royale is already running");
-
-  // The answer-timeout sweep (which force-resolves a royale round if someone doesn't
-  // answer in time) lives on the same interval as the casual matchmaker — make sure
-  // it's actually running even if nobody has ever joined the casual queue yet.
+/** Puts up a "battle royale forming" notice for everyone to see and opt into, instead
+ *  of silently drafting every registered user. No-op if a royale is already forming or
+ *  running, so multiple people mashing the button doesn't reset anyone's progress. */
+export function openRoyaleLobby() {
+  if (state.royale.status === "lobby" || state.royale.status === "countdown" || state.royale.status === "running") {
+    return;
+  }
+  // Same reasoning as the casual matchmaker: the countdown-expiry check lives on this
+  // interval, so it needs to be running even if nobody has used the casual queue yet.
   startMatchmaker();
 
-  const ids = users.map((u) => u.id);
-  const potAmount = await startRoyaleEntriesOnChain(ids);
-
   state.royale = {
-    status: "running",
-    rounds: [buildRound(users.map((u) => ({ id: u.id, name: u.name })))],
+    status: "lobby",
+    participants: [],
+    countdownEndsAt: null,
+    rounds: [],
     currentRound: 0,
     championId: null,
     championName: null,
-    potAmount,
-    startedAt: Date.now(),
+    potAmount: 0,
+    startedAt: null,
   };
+}
 
-  runRoyaleLoop().catch((err) => {
-    console.error("royale loop failed", err);
+/** A player opting into the forming royale. Once MIN_ROYALE_PLAYERS have joined, starts
+ *  a 30s countdown so late joiners still have a window to get in — the roster stays
+ *  open (odd numbers are fine, byes are handled by buildRound) right up until launch. */
+export function joinRoyaleLobby(userId: string, name: string) {
+  if (state.royale.status !== "lobby" && state.royale.status !== "countdown") {
+    throw new Error("no battle royale is forming right now");
+  }
+  if (hasActivePendingMatch(userId)) {
+    throw new Error("finish your current match first");
+  }
+  if (state.royale.participants.some((p) => p.userId === userId)) return;
+
+  state.royale.participants.push({ userId, name });
+
+  if (state.royale.status === "lobby" && state.royale.participants.length >= MIN_ROYALE_PLAYERS) {
+    state.royale.status = "countdown";
+    state.royale.countdownEndsAt = Date.now() + ROYALE_COUNTDOWN_MS;
+  }
+}
+
+async function launchRoyaleFromLobby() {
+  if (state.royale.status !== "countdown") return;
+  state.royale.status = "running"; // synchronous guard against the interval firing twice
+  state.royale.countdownEndsAt = null;
+
+  try {
+    const { participants } = state.royale;
+    const ids = participants.map((p) => p.userId);
+    const potAmount = await startRoyaleEntriesOnChain(ids);
+
+    state.royale.rounds = [buildRound(participants.map((p) => ({ id: p.userId, name: p.name })))];
+    state.royale.currentRound = 0;
+    state.royale.potAmount = potAmount;
+    state.royale.startedAt = Date.now();
+
+    runRoyaleLoop().catch((err) => {
+      console.error("royale loop failed", err);
+      state.royale.status = "idle";
+    });
+  } catch (err) {
+    console.error("royale launch failed", err);
     state.royale.status = "idle";
-  });
+  }
 }
 
 function waitForMatch(matchId: string): Promise<void> {

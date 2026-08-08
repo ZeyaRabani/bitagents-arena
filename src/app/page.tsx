@@ -91,7 +91,9 @@ interface RoyaleMatch {
 }
 
 interface RoyaleState {
-  status: "idle" | "running" | "done";
+  status: "idle" | "lobby" | "countdown" | "running" | "done";
+  participants: { userId: string; name: string }[];
+  countdownEndsAt: number | null;
   rounds: RoyaleMatch[][];
   currentRound: number;
   championId: string | null;
@@ -380,8 +382,10 @@ export default function Home() {
 
   // Drives the whole match modal: poll for the player's current match and derive
   // phase purely from what the server says, so it's correct regardless of timing.
+  // Keeps polling even while idle — royale matches are pushed by the server (nobody
+  // clicks "Play" to get into one), so idle is exactly when we need to notice one.
   useEffect(() => {
-    if (phase === "idle" || !myUser) return;
+    if (!myUser) return;
     let cancelled = false;
 
     async function poll() {
@@ -414,7 +418,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [phase, myUser]);
+  }, [myUser]);
 
   // ambient toasts for any match resolving in the arena, not just ours
   useEffect(() => {
@@ -528,7 +532,24 @@ export default function Home() {
       const res = await fetch("/api/royale/start", { method: "POST" });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      await loadRoyale();
+      if (data.royale) setRoyale(data.royale);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleJoinRoyale() {
+    if (!myUser) return;
+    setError(null);
+    try {
+      const res = await fetch("/api/royale/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: myUser.id, name: myUser.name }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.royale) setRoyale(data.royale);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -536,8 +557,37 @@ export default function Home() {
 
   if (!hydrated) return null;
 
+  const iJoinedRoyale = !!myUser && (royale?.participants.some((p) => p.userId === myUser.id) ?? false);
+  const royaleForming = royale?.status === "lobby" || royale?.status === "countdown";
+  const royaleCountdownS =
+    royale?.status === "countdown" && royale.countdownEndsAt ? Math.max(0, Math.ceil((royale.countdownEndsAt - now) / 1000)) : null;
+
   return (
-    <div className="min-h-screen bg-background text-foreground p-6 md:p-10">
+    <div className={`min-h-screen bg-background text-foreground p-6 md:p-10 ${myUser && royaleForming ? "pt-16 md:pt-20" : ""}`}>
+      {myUser && royaleForming && !iJoinedRoyale && (
+        <div className="fixed top-0 inset-x-0 z-40 bg-signal text-primary-foreground ba-pop-in">
+          <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+            <p className="font-mono text-xs sm:text-sm uppercase tracking-wide">
+              ⚔️ Battle Royale forming — {royale!.participants.length} joined
+              {royaleCountdownS !== null ? ` · starting in ${royaleCountdownS}s` : " · waiting for 4+ to start countdown"}
+            </p>
+            <button
+              onClick={handleJoinRoyale}
+              className="px-4 py-1.5 font-mono text-xs font-semibold uppercase tracking-wide bg-primary-foreground text-signal hover:opacity-90 transition"
+            >
+              Join — $0.05 entry
+            </button>
+          </div>
+        </div>
+      )}
+      {myUser && royaleForming && iJoinedRoyale && (
+        <div className="fixed top-0 inset-x-0 z-40 bg-card border-b border-signal/40 text-foreground ba-pop-in">
+          <div className="max-w-5xl mx-auto px-4 py-3 text-center font-mono text-xs sm:text-sm uppercase tracking-wide text-signal">
+            You&apos;re in! {royale!.participants.length} joined
+            {royaleCountdownS !== null ? ` · starting in ${royaleCountdownS}s` : " · waiting for 4+ players"}
+          </div>
+        </div>
+      )}
       <header className="max-w-5xl mx-auto text-center mb-8">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground mb-2">
           Monad Testnet · {users.length} players · testnet play money only
@@ -575,7 +625,11 @@ export default function Home() {
               <li>Hit Play — you&apos;ll be matched against another real person.</li>
               <li>Both of you get the same multiple-choice question about Monad or crypto. Pick fast — you&apos;ve got 15 seconds.</li>
               <li>Whoever answers correctly wins the $0.05 wager. If you&apos;re both right or both wrong, whoever answered faster wins.</li>
-              <li>Battle Royale: everyone puts in $0.05 up front, the sole survivor takes the entire pot.</li>
+              <li>
+                Battle Royale: anyone can propose one — everyone gets notified and can opt in for $0.05. Once 4+
+                have joined, a 30s countdown starts for stragglers, then it's bracketed and the sole survivor takes
+                the entire pot.
+              </li>
               <li>Balance drips back slowly over time, so you&apos;re never fully out.</li>
             </ol>
             <button
@@ -707,14 +761,47 @@ export default function Home() {
         <section className="border border-border bg-card p-5">
           <div className="flex justify-between items-center flex-wrap gap-2 mb-4">
             <h2 className="font-display text-xl font-bold">Battle Royale</h2>
-            <button
-              onClick={handleStartRoyale}
-              disabled={royale?.status === "running"}
-              className="px-4 py-2 font-mono text-xs uppercase tracking-wide bg-signal text-primary-foreground disabled:opacity-40 hover:opacity-90 transition"
-            >
-              {royale?.status === "running" ? "Running..." : "Start Royale — $0.05 entry"}
-            </button>
+            {royaleForming ? (
+              !iJoinedRoyale ? (
+                <button
+                  onClick={handleJoinRoyale}
+                  className="px-4 py-2 font-mono text-xs uppercase tracking-wide bg-signal text-primary-foreground hover:opacity-90 transition"
+                >
+                  Join — $0.05 entry
+                </button>
+              ) : (
+                <span className="px-4 py-2 font-mono text-xs uppercase tracking-wide text-signal">
+                  You&apos;re in{royaleCountdownS !== null ? ` · ${royaleCountdownS}s` : ""}
+                </span>
+              )
+            ) : (
+              <button
+                onClick={handleStartRoyale}
+                disabled={royale?.status === "running"}
+                className="px-4 py-2 font-mono text-xs uppercase tracking-wide bg-signal text-primary-foreground disabled:opacity-40 hover:opacity-90 transition"
+              >
+                {royale?.status === "running" ? "Running..." : "Form Battle Royale"}
+              </button>
+            )}
           </div>
+
+          {royaleForming && (
+            <div className="mb-4">
+              <p className="font-mono text-xs text-muted-foreground mb-2">
+                {royale!.participants.length} joined
+                {royaleCountdownS !== null
+                  ? ` · starting in ${royaleCountdownS}s`
+                  : ` · needs ${Math.max(0, 4 - royale!.participants.length)} more to start the countdown`}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {royale!.participants.map((p) => (
+                  <span key={p.userId} className="font-mono text-xs border border-signal/40 bg-signal/10 px-2 py-1 text-signal">
+                    {p.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {royale && royale.rounds.length > 0 ? (
             <>
@@ -738,11 +825,11 @@ export default function Home() {
                 ))}
               </div>
             </>
-          ) : (
+          ) : !royaleForming ? (
             <p className="text-muted-foreground text-sm">
-              Everyone currently registered gets bracketed. The last player standing takes the whole pot.
+              Anyone who joins gets bracketed once the countdown ends. The last player standing takes the whole pot.
             </p>
-          )}
+          ) : null}
 
           {royale?.status === "done" && royale.championName && (
             <div className="mt-4 border border-signal/40 bg-signal/10 px-4 py-3 font-display text-lg font-bold text-signal">
