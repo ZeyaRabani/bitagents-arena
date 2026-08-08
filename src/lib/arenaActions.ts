@@ -30,19 +30,42 @@ export function nameHashOf(name: string): `0x${string}` {
   return keccak256(toBytes(name));
 }
 
-export async function fetchAgents(): Promise<OnChainAgent[]> {
+// The public Monad testnet RPC is rate-limited (15 req/sec). Every open browser tab
+// polls /api/agents on its own timer, and the matchmaker polls independently too — with
+// more than a handful of concurrent players that blows through the limit and silently
+// breaks matchmaking (fetchAgents throws, the tick aborts, nobody gets paired). Cache
+// briefly and de-dupe concurrent callers onto a single in-flight request.
+const AGENTS_CACHE_TTL_MS = 2500;
+let agentsCache: { at: number; data: OnChainAgent[] } | null = null;
+let agentsInFlight: Promise<OnChainAgent[]> | null = null;
+
+async function withRpcRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (retries <= 0) throw err;
+    await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
+    return withRpcRetry(fn, retries - 1);
+  }
+}
+
+async function fetchAgentsUncached(): Promise<OnChainAgent[]> {
   const address = getArenaAddress();
-  const total = await publicClient.readContract({
-    address,
-    abi: arenaAbi,
-    functionName: "totalAgents",
-  });
-  const agents = await publicClient.readContract({
-    address,
-    abi: arenaAbi,
-    functionName: "getAgents",
-    args: [BigInt(0), total],
-  });
+  const total = await withRpcRetry(() =>
+    publicClient.readContract({
+      address,
+      abi: arenaAbi,
+      functionName: "totalAgents",
+    })
+  );
+  const agents = await withRpcRetry(() =>
+    publicClient.readContract({
+      address,
+      abi: arenaAbi,
+      functionName: "getAgents",
+      args: [BigInt(0), total],
+    })
+  );
   return agents.map((a) => ({
     id: a.id.toString(),
     owner: a.owner,
@@ -61,6 +84,29 @@ export async function fetchAgents(): Promise<OnChainAgent[]> {
     createdAt: a.createdAt.toString(),
     lastTrainedAt: a.lastTrainedAt.toString(),
   }));
+}
+
+export async function fetchAgents(): Promise<OnChainAgent[]> {
+  if (agentsCache && Date.now() - agentsCache.at < AGENTS_CACHE_TTL_MS) {
+    return agentsCache.data;
+  }
+  if (agentsInFlight) return agentsInFlight;
+
+  agentsInFlight = fetchAgentsUncached()
+    .then((data) => {
+      agentsCache = { at: Date.now(), data };
+      return data;
+    })
+    .finally(() => {
+      agentsInFlight = null;
+    });
+
+  return agentsInFlight;
+}
+
+/** Bypass the cache immediately after a write so the caller sees its own effect. */
+export function invalidateAgentsCache() {
+  agentsCache = null;
 }
 
 export async function isNameTaken(name: string): Promise<boolean> {
@@ -113,6 +159,7 @@ export async function createAgentOnChain(name: string, prompt: string, factIds: 
     }
   }
 
+  invalidateAgentsCache();
   return {
     agentId,
     owner: ownerAccount.address,
@@ -134,6 +181,7 @@ export async function trainAgentOnChain(agentId: string, factId: number) {
     args: [BigInt(agentId), factId],
   });
   await publicClient.waitForTransactionReceipt({ hash });
+  invalidateAgentsCache();
   return { txHash: hash, explorerUrl: `${monadTestnet.blockExplorers.default.url}/tx/${hash}` };
 }
 
@@ -161,6 +209,7 @@ export async function battleOnChain(idA: string, idB: string): Promise<BattleOut
     args: [BigInt(idA), BigInt(idB)],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  invalidateAgentsCache();
 
   for (const log of receipt.logs) {
     try {

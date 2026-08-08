@@ -31,6 +31,8 @@ interface FeedEntry {
   loserName: string;
   factId: number;
   decidedByKnowledge: boolean;
+  winnerRoll: string;
+  loserRoll: string;
   ratingDelta: string;
   winnerRatingAfter: number;
   loserRatingAfter: number;
@@ -70,13 +72,48 @@ function timeAgo(ts: number) {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type BattlePhase = "idle" | "found" | "starting" | "clash" | "result";
+type BattlePhase = "idle" | "searching" | "found" | "starting" | "clash" | "result";
+
+const MIN_SEARCH_MS = 3000;
 
 const PHASE_DURATIONS: Partial<Record<BattlePhase, number>> = {
   found: 1400,
   starting: 1200,
   clash: 900,
 };
+
+function RatingReveal({ from, to }: { from: number; to: number }) {
+  const [display, setDisplay] = useState(from);
+  useEffect(() => {
+    const start = performance.now();
+    const duration = 900;
+    let raf: number;
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / duration);
+      setDisplay(Math.round(from + (to - from) * t));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return <span>{display}</span>;
+}
+
+function StartingCountdown() {
+  const steps = ["3", "2", "1", "FIGHT!"];
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (i >= steps.length - 1) return;
+    const t = setTimeout(() => setI((v) => v + 1), 300);
+    return () => clearTimeout(t);
+  }, [i]);
+  return (
+    <p key={i} className="text-center font-display text-5xl font-black mt-6 text-signal ba-pop-in">
+      {steps[i]}
+    </p>
+  );
+}
 
 function AgentCombatCard({
   agent,
@@ -117,6 +154,7 @@ function BattleModal({
   entry,
   isMeWinner,
   onContinue,
+  onCancelSearch,
 }: {
   phase: BattlePhase;
   me: { name: string; attack: number; defense: number; speed: number } | null;
@@ -124,12 +162,34 @@ function BattleModal({
   entry: FeedEntry | null;
   isMeWinner: boolean;
   onContinue: () => void;
+  onCancelSearch: () => void;
 }) {
   if (phase === "idle") return null;
+
+  const fact = entry ? FACT_POOL[entry.factId] : null;
+  const myRatingAfter = entry ? (isMeWinner ? entry.winnerRatingAfter : entry.loserRatingAfter) : 0;
+  const delta = entry ? Number(entry.ratingDelta) : 0;
+  const myRatingBefore = isMeWinner ? myRatingAfter - delta : myRatingAfter + delta;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-6 ba-fade-in">
       <div className="w-full max-w-lg">
+        {phase === "searching" && (
+          <div className="text-center ba-fade-in">
+            <div className="mx-auto w-24 h-24 rounded-full border-4 border-signal/30 border-t-signal animate-spin mb-6" />
+            <p className="font-display text-2xl font-bold">{me?.name}</p>
+            <p className="font-mono text-sm text-muted-foreground mt-2 uppercase tracking-widest ba-flash">
+              Searching for an opponent...
+            </p>
+            <button
+              onClick={onCancelSearch}
+              className="mt-8 text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              Cancel search
+            </button>
+          </div>
+        )}
+
         {(phase === "found" || phase === "starting" || phase === "clash") && (
           <>
             <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4 ba-fade-in">
@@ -142,11 +202,7 @@ function BattleModal({
               <span className="font-display text-2xl font-black text-signal shrink-0">VS</span>
               <AgentCombatCard agent={opponent} side="right" />
             </div>
-            {phase === "starting" && (
-              <p className="text-center font-display text-3xl font-black mt-6 text-signal ba-pop-in">
-                AGENT BATTLE STARTS
-              </p>
-            )}
+            {phase === "starting" && <StartingCountdown />}
             {phase === "clash" && (
               <p className="text-center font-mono text-sm mt-6 text-muted-foreground ba-flash">
                 resolving on Monad testnet...
@@ -156,7 +212,7 @@ function BattleModal({
         )}
 
         {phase === "result" && entry && (
-          <div className="ba-pop-in">
+          <div key={entry.txHash} className="ba-pop-in">
             <p className="text-center font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground mb-4">
               Battle resolved
             </p>
@@ -165,27 +221,50 @@ function BattleModal({
               <span className="font-display text-2xl font-black text-muted-foreground shrink-0">VS</span>
               <AgentCombatCard agent={opponent} side="right" outcome={isMeWinner ? "loser" : "winner"} />
             </div>
+
             <div className="text-center mt-6">
-              <p className="font-display text-2xl font-black">
+              <p className={`font-display text-3xl font-black ${isMeWinner ? "ba-pop-in" : ""}`}>
                 {isMeWinner ? "🏆 You won" : "Defeated"}
               </p>
-              <p className="font-mono text-sm text-muted-foreground mt-1">
-                {entry.decidedByKnowledge ? "Decided by knowledge" : "Decided by stats"} ·{" "}
-                {isMeWinner ? "+" : "-"}
-                {entry.ratingDelta} rating
+              <p className="font-mono text-lg mt-1">
+                <span className={isMeWinner ? "text-signal" : "text-destructive"}>
+                  {isMeWinner ? "+" : "-"}
+                  {delta}
+                </span>{" "}
+                <span className="text-muted-foreground text-sm">
+                  (<RatingReveal from={myRatingBefore} to={myRatingAfter} /> rating)
+                </span>
               </p>
-              <a
-                href={entry.explorerUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono text-xs text-signal underline mt-1 inline-block"
-              >
-                view battle tx
-              </a>
             </div>
+
+            {fact && (
+              <div className="mt-5 border border-border bg-surface px-4 py-3">
+                <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                  {entry.decidedByKnowledge ? "🧠 Decided by knowledge" : "🎲 Decided by stats"}
+                </p>
+                <p className="text-sm">
+                  The question was <span className="text-foreground font-semibold">&ldquo;{fact.q}&rdquo;</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {entry.decidedByKnowledge
+                    ? `${entry.winnerName} had been taught this — ${entry.loserName} hadn't.`
+                    : `Neither agent had been taught this, so stats settled it (${entry.winnerRoll} vs ${entry.loserRoll}).`}
+                </p>
+              </div>
+            )}
+
+            <a
+              href={entry.explorerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-xs text-signal underline mt-3 inline-block"
+            >
+              view battle tx
+            </a>
+
             <button
               onClick={onContinue}
-              className="w-full mt-6 px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground hover:opacity-90 transition"
+              className="w-full mt-4 px-6 py-3 font-mono font-semibold uppercase tracking-[0.1em] text-sm bg-signal text-primary-foreground hover:opacity-90 transition"
             >
               Continue
             </button>
@@ -202,14 +281,16 @@ export default function Home() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [royale, setRoyale] = useState<RoyaleState | null>(null);
-  const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [battlePhase, setBattlePhase] = useState<BattlePhase>("idle");
   const [battleEntry, setBattleEntry] = useState<FeedEntry | null>(null);
   const [battleOpponent, setBattleOpponent] = useState<Agent | null>(null);
   const [battleSelf, setBattleSelf] = useState<Agent | null>(null);
+  const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
   const lastHandledBattleAt = useRef<number>(0);
+  const searchStartedAt = useRef<number>(0);
+  const toastedAtRef = useRef<number | null>(null);
 
   // create-form state
   const [name, setName] = useState("");
@@ -281,23 +362,31 @@ export default function Home() {
     };
   }, [loadAgents, loadFeed, loadRoyale]);
 
-  // detect our queue match resolving and kick off the dramatic reveal sequence
+  // detect our queue match resolving and kick off the dramatic reveal sequence —
+  // enforces a minimum "searching" duration so it never feels like an instant
+  // auto-challenge, even if the matchmaker paired us within a second.
   useEffect(() => {
-    if (!searching || !myAgent) return;
+    if (battlePhase !== "searching" || !myAgent) return;
     const mine = feed.find(
       (f) => f.mode === "queue" && (f.winnerId === myAgent.id || f.loserId === myAgent.id) && f.at > lastHandledBattleAt.current
     );
     if (!mine) return;
 
     lastHandledBattleAt.current = mine.at;
-    setSearching(false);
-
     const opponentId = mine.winnerId === myAgent.id ? mine.loserId : mine.winnerId;
-    setBattleOpponent(agents.find((a) => a.id === opponentId) ?? null);
-    setBattleSelf(agents.find((a) => a.id === myAgent.id) ?? null);
-    setBattleEntry(mine);
-    setBattlePhase("found");
-  }, [feed, searching, myAgent, agents]);
+    const opponent = agents.find((a) => a.id === opponentId) ?? null;
+    const self = agents.find((a) => a.id === myAgent.id) ?? null;
+
+    const elapsed = Date.now() - searchStartedAt.current;
+    const remaining = Math.max(0, MIN_SEARCH_MS - elapsed);
+    const t = setTimeout(() => {
+      setBattleOpponent(opponent);
+      setBattleSelf(self);
+      setBattleEntry(mine);
+      setBattlePhase("found");
+    }, remaining);
+    return () => clearTimeout(t);
+  }, [feed, battlePhase, myAgent, agents]);
 
   // auto-advance the battle sequence through its theatrical beats
   useEffect(() => {
@@ -308,11 +397,43 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [battlePhase]);
 
+  // ambient toasts for any battle happening in the arena, not just ours
+  useEffect(() => {
+    if (feed.length === 0) return;
+    if (toastedAtRef.current === null) {
+      toastedAtRef.current = feed[0].at; // baseline on first load, don't backfill history
+      return;
+    }
+    const newOnes = feed.filter((f) => f.at > toastedAtRef.current!).sort((a, b) => a.at - b.at);
+    if (newOnes.length === 0) return;
+    toastedAtRef.current = feed[0].at;
+
+    const additions = newOnes.map((f) => ({
+      id: `${f.txHash}-${f.at}`,
+      text: `${f.winnerName} beat ${f.loserName}${f.decidedByKnowledge ? " — knew it!" : ""}`,
+    }));
+    setToasts((prev) => [...prev, ...additions].slice(-4));
+    additions.forEach((t) => {
+      setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 4500);
+    });
+  }, [feed]);
+
   function closeBattleModal() {
     setBattlePhase("idle");
     setBattleEntry(null);
     setBattleOpponent(null);
     setBattleSelf(null);
+  }
+
+  async function handleCancelSearch() {
+    if (myAgent) {
+      fetch("/api/queue/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: myAgent.id }),
+      }).catch(() => {});
+    }
+    setBattlePhase("idle");
   }
 
   const me = useMemo(() => agents.find((a) => a.id === myAgent?.id) ?? null, [agents, myAgent]);
@@ -383,7 +504,8 @@ export default function Home() {
   async function handlePlay() {
     if (!myAgent) return;
     setError(null);
-    setSearching(true);
+    searchStartedAt.current = Date.now();
+    setBattlePhase("searching");
     try {
       const res = await fetch("/api/queue/join", {
         method: "POST",
@@ -394,7 +516,7 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
     } catch (err) {
       setError((err as Error).message);
-      setSearching(false);
+      setBattlePhase("idle");
     }
   }
 
@@ -521,10 +643,10 @@ export default function Home() {
                 <div className="mt-5">
                   <button
                     onClick={handlePlay}
-                    disabled={searching || battlePhase !== "idle"}
+                    disabled={battlePhase !== "idle"}
                     className="w-full px-6 py-4 font-mono font-bold uppercase tracking-[0.1em] bg-signal text-primary-foreground disabled:opacity-60 hover:opacity-90 transition"
                   >
-                    {searching ? "Searching for opponent..." : "Play"}
+                    {battlePhase === "searching" ? "Searching for opponent..." : "Play"}
                   </button>
                 </div>
 
@@ -669,12 +791,24 @@ export default function Home() {
 
       <BattleModal
         phase={battlePhase}
-        me={battleSelf}
+        me={battlePhase === "searching" ? me : battleSelf}
         opponent={battleOpponent}
         entry={battleEntry}
         isMeWinner={battleEntry?.winnerId === myAgent?.id}
         onContinue={closeBattleModal}
+        onCancelSearch={handleCancelSearch}
       />
+
+      <div className="fixed top-4 right-4 z-40 flex flex-col gap-2 max-w-xs">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="ba-slide-right bg-card border border-border px-4 py-2 text-xs shadow-lg"
+          >
+            {t.text}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -62,9 +62,15 @@ async function runBattle(idA: string, idB: string, nameA: string, nameB: string,
   return entry;
 }
 
+const QUEUE_STALE_MS = 90_000;
+
 export function joinQueue(agentId: string, name: string) {
   if (state.queue.some((q) => q.agentId === agentId)) return;
   state.queue.push({ agentId, name, joinedAt: Date.now() });
+}
+
+export function leaveQueue(agentId: string) {
+  state.queue = state.queue.filter((q) => q.agentId !== agentId);
 }
 
 export function queueSnapshot() {
@@ -78,6 +84,11 @@ export function startMatchmaker() {
   state.matchmakerStarted = true;
 
   matchmakerTimer = setInterval(async () => {
+    // Drop entries nobody's waiting on anymore (closed tab, gave up, stale test
+    // data) so a fresh "Play" never gets auto-paired against an abandoned search.
+    const cutoff = Date.now() - QUEUE_STALE_MS;
+    state.queue = state.queue.filter((q) => q.joinedAt > cutoff);
+
     if (state.queue.length < 2) return;
     try {
       const agents = await fetchAgents();
