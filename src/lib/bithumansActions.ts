@@ -182,8 +182,8 @@ export interface MatchOutcome {
   loserId: string;
   questionId: number;
   decidedByAnswer: boolean;
-  winnerThrow: number;
-  loserThrow: number;
+  winnerAnswerMs: number;
+  loserAnswerMs: number;
   wager: number;
   winnerBalanceAfter: number;
   loserBalanceAfter: number;
@@ -197,7 +197,9 @@ export async function resolveWagerMatchOnChain(
   questionId: number,
   correctIndex: number,
   answerA: number,
-  answerB: number
+  answerB: number,
+  answerMsA: number,
+  answerMsB: number
 ): Promise<MatchOutcome> {
   const relayer = getRelayerClient();
   const address = getBitHumansAddress();
@@ -206,7 +208,7 @@ export async function resolveWagerMatchOnChain(
       address,
       abi: bithumansAbi,
       functionName: "resolveWagerMatch",
-      args: [BigInt(idA), BigInt(idB), questionId, correctIndex, answerA, answerB],
+      args: [BigInt(idA), BigInt(idB), questionId, correctIndex, answerA, answerB, answerMsA, answerMsB],
       nonce,
     })
   );
@@ -221,8 +223,8 @@ export async function resolveWagerMatchOnChain(
         loserId: decoded.args.loserId.toString(),
         questionId: decoded.args.questionId,
         decidedByAnswer: decoded.args.decidedByAnswer,
-        winnerThrow: decoded.args.winnerThrow,
-        loserThrow: decoded.args.loserThrow,
+        winnerAnswerMs: decoded.args.winnerAnswerMs,
+        loserAnswerMs: decoded.args.loserAnswerMs,
         wager: decoded.args.wager,
         winnerBalanceAfter: decoded.args.winnerBalanceAfter,
         loserBalanceAfter: decoded.args.loserBalanceAfter,
@@ -241,8 +243,8 @@ export interface RoyaleRoundOutcome {
   loserId: string;
   questionId: number;
   decidedByAnswer: boolean;
-  winnerThrow: number;
-  loserThrow: number;
+  winnerAnswerMs: number;
+  loserAnswerMs: number;
   txHash: string;
   explorerUrl: string;
 }
@@ -253,7 +255,9 @@ export async function resolveRoyaleRoundOnChain(
   questionId: number,
   correctIndex: number,
   answerA: number,
-  answerB: number
+  answerB: number,
+  answerMsA: number,
+  answerMsB: number
 ): Promise<RoyaleRoundOutcome> {
   const relayer = getRelayerClient();
   const address = getBitHumansAddress();
@@ -262,7 +266,7 @@ export async function resolveRoyaleRoundOnChain(
       address,
       abi: bithumansAbi,
       functionName: "resolveRoyaleRound",
-      args: [BigInt(idA), BigInt(idB), questionId, correctIndex, answerA, answerB],
+      args: [BigInt(idA), BigInt(idB), questionId, correctIndex, answerA, answerB, answerMsA, answerMsB],
       nonce,
     })
   );
@@ -276,8 +280,8 @@ export async function resolveRoyaleRoundOnChain(
         loserId: decoded.args.loserId.toString(),
         questionId: decoded.args.questionId,
         decidedByAnswer: decoded.args.decidedByAnswer,
-        winnerThrow: decoded.args.winnerThrow,
-        loserThrow: decoded.args.loserThrow,
+        winnerAnswerMs: decoded.args.winnerAnswerMs,
+        loserAnswerMs: decoded.args.loserAnswerMs,
         txHash: hash,
         explorerUrl: `${monadTestnet.blockExplorers.default.url}/tx/${hash}`,
       };

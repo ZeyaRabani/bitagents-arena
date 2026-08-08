@@ -10,6 +10,13 @@ function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+const NEVER_ANSWERED_MS = 0xffffffff;
+
+function formatAnswerMs(ms: number): string {
+  if (ms >= NEVER_ANSWERED_MS) return "didn't answer";
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 interface UserRow {
   id: string;
   owner: string;
@@ -28,8 +35,8 @@ interface FeedEntry {
   loserName: string;
   questionId: number;
   decidedByAnswer: boolean;
-  winnerThrow: number;
-  loserThrow: number;
+  winnerAnswerMs: number;
+  loserAnswerMs: number;
   wager: number;
   winnerBalanceAfter: number;
   loserBalanceAfter: number;
@@ -51,8 +58,8 @@ interface MatchOutcome {
   winnerId: string;
   loserId: string;
   decidedByAnswer: boolean;
-  winnerThrow: number;
-  loserThrow: number;
+  winnerAnswerMs: number;
+  loserAnswerMs: number;
   wager?: number;
   winnerBalanceAfter?: number;
   loserBalanceAfter?: number;
@@ -90,9 +97,6 @@ interface RoyaleState {
   championName: string | null;
   potAmount: number;
 }
-
-const THROW_NAMES = ["Rock", "Paper", "Scissors"];
-const THROW_EMOJI = ["🪨", "📄", "✂️"];
 
 function timeAgo(ts: number) {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -246,19 +250,16 @@ function MatchModal({
 
             <div className="mt-5 border border-border bg-surface px-4 py-3">
               <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                {outcome.decidedByAnswer ? "🧠 Decided by the answer" : "✊ Decided by Rock Paper Scissors"}
+                {outcome.decidedByAnswer ? "🧠 Decided by the answer" : "⚡ Decided by speed"}
               </p>
               <p className="text-xs text-muted-foreground">
                 {outcome.decidedByAnswer
                   ? "One of you answered correctly and one didn't — the correct answer always wins outright."
-                  : outcome.winnerThrow === outcome.loserThrow
-                    ? `Both of you answered the same way, so it came down to Rock Paper Scissors — a genuine tie, broken by one more coinflip.`
-                    : `Both of you were equally right or wrong, so it came down to Rock Paper Scissors — no other factor decides it.`}
+                  : "You were both equally right or wrong, so it came down to who answered faster — this is a speed game."}
               </p>
               {!outcome.decidedByAnswer && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {THROW_EMOJI[outcome.winnerThrow]} {THROW_NAMES[outcome.winnerThrow]} vs {THROW_EMOJI[outcome.loserThrow]}{" "}
-                  {THROW_NAMES[outcome.loserThrow]}
+                  {formatAnswerMs(outcome.winnerAnswerMs)} vs {formatAnswerMs(outcome.loserAnswerMs)}
                 </p>
               )}
             </div>
@@ -567,7 +568,7 @@ export default function Home() {
               <li>Name yourself. You get $0.30 in testnet play money to start.</li>
               <li>Hit Play — you&apos;ll be matched against another real person.</li>
               <li>Both of you get the same multiple-choice question about Monad or crypto. Pick fast — you&apos;ve got 15 seconds.</li>
-              <li>Whoever answers correctly wins the $0.05 wager. If you&apos;re both right or both wrong, Rock Paper Scissors decides.</li>
+              <li>Whoever answers correctly wins the $0.05 wager. If you&apos;re both right or both wrong, whoever answered faster wins.</li>
               <li>Battle Royale: everyone puts in $0.05 up front, the sole survivor takes the entire pot.</li>
               <li>Balance drips back slowly over time, so you&apos;re never fully out.</li>
             </ol>
@@ -682,7 +683,7 @@ export default function Home() {
                   <span className="text-muted-foreground">beat</span> {f.loserName}
                   <span className="text-muted-foreground">
                     {" "}
-                    · {f.decidedByAnswer ? "knew it" : "won rock paper scissors"} · +{money(f.wager)}
+                    · {f.decidedByAnswer ? "knew it" : "was faster"} · +{money(f.wager)}
                   </span>{" "}
                   {f.explorerUrl && (
                     <a href={f.explorerUrl} target="_blank" rel="noreferrer" className="text-signal underline">

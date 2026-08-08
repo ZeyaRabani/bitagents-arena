@@ -5,9 +5,10 @@ pragma solidity ^0.8.24;
 /// @notice Every player gets a starting balance (in cents, testnet-only — this is not
 ///         real money). Matches wager a fixed amount on a Monad/crypto multiple-choice
 ///         question; whoever answers correctly takes the pot. If both or neither answer
-///         correctly, it's settled by rock-paper-scissors instead — never anything else.
-///         Battle Royale pools everyone's entry up front and pays the sole survivor the
-///         whole pot. Balances quietly drip back over time so nobody is ever fully out.
+///         correctly, whoever answered faster wins instead — this is a speed game, not a
+///         coinflip. Battle Royale pools everyone's entry up front and pays the sole
+///         survivor the whole pot. Balances quietly drip back over time so nobody is
+///         ever fully out.
 contract BitHumans {
     struct UserAcct {
         uint256 id;
@@ -40,8 +41,8 @@ contract BitHumans {
         uint256 indexed loserId,
         uint8 questionId,
         bool decidedByAnswer,
-        uint8 winnerThrow,
-        uint8 loserThrow,
+        uint32 winnerAnswerMs,
+        uint32 loserAnswerMs,
         uint32 wager,
         uint32 winnerBalanceAfter,
         uint32 loserBalanceAfter,
@@ -54,8 +55,8 @@ contract BitHumans {
         uint256 indexed loserId,
         uint8 questionId,
         bool decidedByAnswer,
-        uint8 winnerThrow,
-        uint8 loserThrow
+        uint32 winnerAnswerMs,
+        uint32 loserAnswerMs
     );
     event RoyaleChampionPaid(uint256 indexed championId, uint32 potAmount, uint32 balanceAfter);
 
@@ -132,39 +133,34 @@ contract BitHumans {
     }
 
     /// @dev Shared resolution: whoever answered correctly wins outright. If both or
-    ///      neither did, it's a rock-paper-scissors coinflip off chain state — no
-    ///      external factor ever tips a fight.
+    ///      neither did, whoever answered faster wins — `answerMsA`/`answerMsB` are
+    ///      milliseconds from question-shown to answer-submitted, timed by the relayer
+    ///      (the same trust boundary as everything else it reports, e.g. which question
+    ///      was actually asked). A player who never answered in time is passed a very
+    ///      large sentinel so they can never win a speed tiebreak.
     function _decide(
         uint256 idA,
         uint256 idB,
         uint8 correctIndex,
         uint8 answerA,
-        uint8 answerB
-    ) internal view returns (uint256 winnerId, uint256 loserId, bool decidedByAnswer, uint8 winnerThrow, uint8 loserThrow) {
-        uint256 seed = uint256(
-            keccak256(abi.encodePacked(blockhash(block.number - 1), block.prevrandao, block.timestamp, idA, idB))
-        );
-
+        uint8 answerB,
+        uint32 answerMsA,
+        uint32 answerMsB
+    ) internal pure returns (uint256 winnerId, uint256 loserId, bool decidedByAnswer, uint32 winnerAnswerMs, uint32 loserAnswerMs) {
         bool aCorrect = answerA == correctIndex;
         bool bCorrect = answerB == correctIndex;
         decidedByAnswer = aCorrect != bCorrect;
 
-        uint8 throwA = uint8(seed % 3);
-        uint8 throwB = uint8((seed >> 64) % 3);
-
         if (decidedByAnswer) {
             winnerId = aCorrect ? idA : idB;
             loserId = aCorrect ? idB : idA;
-            winnerThrow = aCorrect ? throwA : throwB;
-            loserThrow = aCorrect ? throwB : throwA;
         } else {
-            uint256 beats = (uint256(throwA) + 3 - uint256(throwB)) % 3;
-            bool aWins = beats == 1 || (beats == 0 && (seed >> 128) % 2 == 0);
-            winnerId = aWins ? idA : idB;
-            loserId = aWins ? idB : idA;
-            winnerThrow = aWins ? throwA : throwB;
-            loserThrow = aWins ? throwB : throwA;
+            bool aFaster = answerMsA <= answerMsB;
+            winnerId = aFaster ? idA : idB;
+            loserId = aFaster ? idB : idA;
         }
+        winnerAnswerMs = winnerId == idA ? answerMsA : answerMsB;
+        loserAnswerMs = winnerId == idA ? answerMsB : answerMsA;
     }
 
     /// @notice Resolve a wagered 1v1 match: both players staked WAGER, the winner takes
@@ -175,7 +171,9 @@ contract BitHumans {
         uint8 questionId,
         uint8 correctIndex,
         uint8 answerA,
-        uint8 answerB
+        uint8 answerB,
+        uint32 answerMsA,
+        uint32 answerMsB
     ) external onlyRelayer returns (uint256 winnerId, uint256 loserId) {
         require(idA != idB, "BitHumans: same user");
         UserAcct storage a = users[idA];
@@ -186,8 +184,8 @@ contract BitHumans {
         _settleDrip(b);
         require(a.balance >= WAGER && b.balance >= WAGER, "BitHumans: insufficient balance");
 
-        (uint256 wId, uint256 lId, bool decidedByAnswer, uint8 winnerThrow, uint8 loserThrow) =
-            _decide(idA, idB, correctIndex, answerA, answerB);
+        (uint256 wId, uint256 lId, bool decidedByAnswer, uint32 winnerAnswerMs, uint32 loserAnswerMs) =
+            _decide(idA, idB, correctIndex, answerA, answerB, answerMsA, answerMsB);
         winnerId = wId;
         loserId = lId;
 
@@ -204,8 +202,8 @@ contract BitHumans {
             loserId,
             questionId,
             decidedByAnswer,
-            winnerThrow,
-            loserThrow,
+            winnerAnswerMs,
+            loserAnswerMs,
             WAGER,
             winner.balance,
             loser.balance,
@@ -235,20 +233,22 @@ contract BitHumans {
         uint8 questionId,
         uint8 correctIndex,
         uint8 answerA,
-        uint8 answerB
+        uint8 answerB,
+        uint32 answerMsA,
+        uint32 answerMsB
     ) external onlyRelayer returns (uint256 winnerId, uint256 loserId) {
         require(idA != idB, "BitHumans: same user");
         require(users[idA].id != 0 && users[idB].id != 0, "BitHumans: unknown user");
 
-        (uint256 wId, uint256 lId, bool decidedByAnswer, uint8 winnerThrow, uint8 loserThrow) =
-            _decide(idA, idB, correctIndex, answerA, answerB);
+        (uint256 wId, uint256 lId, bool decidedByAnswer, uint32 winnerAnswerMs, uint32 loserAnswerMs) =
+            _decide(idA, idB, correctIndex, answerA, answerB, answerMsA, answerMsB);
         winnerId = wId;
         loserId = lId;
 
         users[winnerId].wins += 1;
         users[loserId].losses += 1;
 
-        emit RoyaleRoundResolved(winnerId, loserId, questionId, decidedByAnswer, winnerThrow, loserThrow);
+        emit RoyaleRoundResolved(winnerId, loserId, questionId, decidedByAnswer, winnerAnswerMs, loserAnswerMs);
     }
 
     /// @notice Pay the whole locked-in pot to the sole Battle Royale survivor.

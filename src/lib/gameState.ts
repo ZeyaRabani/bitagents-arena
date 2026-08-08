@@ -11,6 +11,7 @@ import { pickRandomQuestion, type Question } from "./questionPool";
 
 const NO_ANSWER = 255;
 const ANSWER_TIMEOUT_MS = 15_000;
+const NEVER_ANSWERED_MS = 0xffffffff; // uint32 max — can never win a speed tiebreak
 
 export interface PendingMatch {
   id: string;
@@ -22,6 +23,10 @@ export interface PendingMatch {
   question: Question;
   answerA: number | null;
   answerB: number | null;
+  /** Wall-clock time each side's answer was received, for the speed tiebreak — this is
+   *  what actually decides a correctness tie now, not anything chain-random. */
+  answeredAtA: number | null;
+  answeredAtB: number | null;
   createdAt: number;
   /** True once resolution (success or failure) has fully finished — only at that point
    *  is `outcome` guaranteed to be populated (if it's going to be). Distinct from the
@@ -29,7 +34,9 @@ export interface PendingMatch {
    *  while the on-chain write is still pending. */
   resolved: boolean;
   resolving: boolean;
-  outcome?: MatchOutcome | { winnerId: string; loserId: string; decidedByAnswer: boolean; winnerThrow: number; loserThrow: number };
+  outcome?:
+    | MatchOutcome
+    | { winnerId: string; loserId: string; decidedByAnswer: boolean; winnerAnswerMs: number; loserAnswerMs: number };
 }
 
 export interface FeedEntry {
@@ -39,8 +46,8 @@ export interface FeedEntry {
   loserName: string;
   questionId: number;
   decidedByAnswer: boolean;
-  winnerThrow: number;
-  loserThrow: number;
+  winnerAnswerMs: number;
+  loserAnswerMs: number;
   wager: number;
   winnerBalanceAfter: number;
   loserBalanceAfter: number;
@@ -107,6 +114,8 @@ function createPendingMatch(idA: string, nameA: string, idB: string, nameB: stri
     question: pickRandomQuestion(),
     answerA: null,
     answerB: null,
+    answeredAtA: null,
+    answeredAtB: null,
     createdAt: Date.now(),
     resolved: false,
     resolving: false,
@@ -148,10 +157,21 @@ async function resolveMatch(m: PendingMatch) {
   m.resolving = true; // synchronous guard against a duplicate concurrent trigger
   const answerA = m.answerA ?? NO_ANSWER;
   const answerB = m.answerB ?? NO_ANSWER;
+  const answerMsA = m.answeredAtA !== null ? m.answeredAtA - m.createdAt : NEVER_ANSWERED_MS;
+  const answerMsB = m.answeredAtB !== null ? m.answeredAtB - m.createdAt : NEVER_ANSWERED_MS;
 
   try {
     if (m.mode === "queue") {
-      const outcome = await resolveWagerMatchOnChain(m.idA, m.idB, m.question.id, m.question.correctIndex, answerA, answerB);
+      const outcome = await resolveWagerMatchOnChain(
+        m.idA,
+        m.idB,
+        m.question.id,
+        m.question.correctIndex,
+        answerA,
+        answerB,
+        answerMsA,
+        answerMsB
+      );
       m.outcome = outcome;
       pushFeed({
         winnerId: outcome.winnerId,
@@ -160,8 +180,8 @@ async function resolveMatch(m: PendingMatch) {
         loserName: outcome.loserId === m.idA ? m.nameA : m.nameB,
         questionId: outcome.questionId,
         decidedByAnswer: outcome.decidedByAnswer,
-        winnerThrow: outcome.winnerThrow,
-        loserThrow: outcome.loserThrow,
+        winnerAnswerMs: outcome.winnerAnswerMs,
+        loserAnswerMs: outcome.loserAnswerMs,
         wager: outcome.wager,
         winnerBalanceAfter: outcome.winnerBalanceAfter,
         loserBalanceAfter: outcome.loserBalanceAfter,
@@ -171,7 +191,16 @@ async function resolveMatch(m: PendingMatch) {
         mode: "queue",
       });
     } else {
-      const outcome = await resolveRoyaleRoundOnChain(m.idA, m.idB, m.question.id, m.question.correctIndex, answerA, answerB);
+      const outcome = await resolveRoyaleRoundOnChain(
+        m.idA,
+        m.idB,
+        m.question.id,
+        m.question.correctIndex,
+        answerA,
+        answerB,
+        answerMsA,
+        answerMsB
+      );
       m.outcome = outcome;
     }
   } catch (err) {
@@ -188,8 +217,14 @@ async function resolveMatch(m: PendingMatch) {
 export function submitAnswer(matchId: string, userId: string, choice: number) {
   const m = state.pendingMatches.get(matchId);
   if (!m || m.resolved) return;
-  if (m.idA === userId) m.answerA = choice;
-  else if (m.idB === userId) m.answerB = choice;
+  const now = Date.now();
+  if (m.idA === userId && m.answerA === null) {
+    m.answerA = choice;
+    m.answeredAtA = now;
+  } else if (m.idB === userId && m.answerB === null) {
+    m.answerB = choice;
+    m.answeredAtB = now;
+  }
   if (m.answerA !== null && m.answerB !== null) {
     void resolveMatch(m);
   }
